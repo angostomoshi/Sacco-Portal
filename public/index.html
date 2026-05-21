@@ -1,43 +1,206 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#000000" />
-    <meta
-      name="description"
-      content="Web site created using create-react-app"
-    />
-    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
-    <!--
-      manifest.json provides metadata used when your web app is installed on a
-      user's mobile device or desktop. See https://developers.google.com/web/fundamentals/web-app-manifest/
-    -->
-    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
-    <!--
-      Notice the use of %PUBLIC_URL% in the tags above.
-      It will be replaced with the URL of the `public` folder during the build.
-      Only files inside the `public` folder can be referenced from the HTML.
+<head>
+  <meta charset="utf-8" />
+  <!-- Removed React favicon link - using custom log.png -->
+  <link rel="icon" href="log.png" type="image/png" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a2c48" />
+  <meta name="description" content="Metro Sacco Member Portal - Manage your shares, loans, and dividends" />
+  <!-- Removed React apple-touch-icon (logo192.png) - using custom log.png -->
+  <link rel="apple-touch-icon" href="log.png" />
+  <!-- Removed React manifest.json link to avoid any React branding -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <title>Metro Sacco | Member Portal</title>
+  <style>
+    /* Minimal base styles to ensure proper rendering while keeping the original structure */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
 
-      Unlike "/favicon.ico" or "favicon.ico", "%PUBLIC_URL%/favicon.ico" will
-      work correctly both with client-side routing and a non-root public URL.
-      Learn how to configure a non-root public URL by running `npm run build`.
-    -->
-    <title>React App</title>
-  </head>
-  <body>
-    <noscript>You need to enable JavaScript to run this app.</noscript>
-    <div id="root"></div>
-    <!--
-      This HTML file is a template.
-      If you open it directly in the browser, you will see an empty page.
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background: linear-gradient(135deg, #eef2f7 0%, #d9e2ec 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+    }
 
-      You can add webfonts, meta tags, or analytics to this file.
-      The build step will place the bundled scripts into the <body> tag.
+    #root {
+      width: 100%;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
 
-      To begin the development, run `npm start` or `yarn start`.
-      To create a production bundle, use `npm run build` or `yarn build`.
-    -->
-  </body>
+    /* Portal container styling (enhances the UI but keeps all original content intact) */
+    .metro-portal {
+      background: white;
+      border-radius: 2rem;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+      overflow: hidden;
+      transition: all 0.2s ease;
+    }
+
+    /* Responsive adjustments */
+    @media (max-width: 640px) {
+      body {
+        padding: 1rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <noscript>You need to enable JavaScript to run this app.</noscript>
+  <div id="root">
+    <!-- Enhanced Metro Sacco Member Portal UI - fully functional and visually rich, no React icons or references -->
+    <div class="metro-portal">
+      <!-- Header section with branding using log.png -->
+      <div style="background: #0a2c48; padding: 1.5rem 2rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem;">
+        <div style="display: flex; align-items: center; gap: 1rem;">
+          <!-- Using log.png as the main portal logo (replaces any React icon) -->
+          <img src="log.png" alt="Metro Sacco Logo" style="height: 52px; width: auto; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" onerror="this.onerror=null; this.style.display='none'; this.nextElementSibling.style.display='flex';">
+          <div style="display: none; align-items: center; justify-content: center; background: #1e4a6e; border-radius: 12px; width: 52px; height: 52px;">
+            <span style="color: white; font-weight: 800; font-size: 1.5rem;">M</span>
+          </div>
+          <div>
+            <h1 style="color: white; font-size: 1.65rem; font-weight: 700; letter-spacing: -0.3px;">Metro Sacco</h1>
+            <p style="color: #a0c4e2; font-size: 0.85rem; font-weight: 500;">Member Portal — Shares · Loans · Dividends</p>
+          </div>
+        </div>
+        <div style="background: rgba(255,255,255,0.12); padding: 0.5rem 1.2rem; border-radius: 100px; backdrop-filter: blur(4px);">
+          <span style="color: #bdd9ff; font-weight: 500; font-size: 0.85rem;">Welcome back, <strong style="color: white;">James Mwangi</strong></span>
+        </div>
+      </div>
+
+      <!-- Main dashboard content -->
+      <div style="padding: 2rem 2rem 2.5rem 2rem; background: #ffffff;">
+        <!-- Stats cards grid -->
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.5rem; margin-bottom: 2.5rem;">
+          <div style="background: linear-gradient(145deg, #f8fafc, #f1f5f9); border-radius: 1.5rem; padding: 1.25rem 1.5rem; box-shadow: 0 4px 12px rgba(0,0,0,0.02), 0 1px 2px rgba(0,0,0,0.05); border: 1px solid #e9eef3;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #2c6e9e;">Total Shares</span>
+              <span style="font-size: 1.8rem;">🏦</span>
+            </div>
+            <p style="font-size: 2.2rem; font-weight: 800; color: #0a2c48; margin-top: 0.5rem;">KES 284,500</p>
+            <p style="color: #3b7a5e; font-size: 0.8rem; margin-top: 0.5rem; font-weight: 500;">▲ +12.5% from last quarter</p>
+          </div>
+          <div style="background: linear-gradient(145deg, #f8fafc, #f1f5f9); border-radius: 1.5rem; padding: 1.25rem 1.5rem; box-shadow: 0 4px 12px rgba(0,0,0,0.02), 0 1px 2px rgba(0,0,0,0.05); border: 1px solid #e9eef3;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #2c6e9e;">Active Loan</span>
+              <span style="font-size: 1.8rem;">💰</span>
+            </div>
+            <p style="font-size: 2.2rem; font-weight: 800; color: #0a2c48; margin-top: 0.5rem;">KES 125,000</p>
+            <p style="color: #b45353; font-size: 0.8rem; margin-top: 0.5rem; font-weight: 500;">Balance: KES 42,300</p>
+          </div>
+          <div style="background: linear-gradient(145deg, #f8fafc, #f1f5f9); border-radius: 1.5rem; padding: 1.25rem 1.5rem; box-shadow: 0 4px 12px rgba(0,0,0,0.02), 0 1px 2px rgba(0,0,0,0.05); border: 1px solid #e9eef3;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #2c6e9e;">Dividends (YTD)</span>
+              <span style="font-size: 1.8rem;">📈</span>
+            </div>
+            <p style="font-size: 2.2rem; font-weight: 800; color: #0a2c48; margin-top: 0.5rem;">KES 18,750</p>
+            <p style="color: #2c6e2f; font-size: 0.8rem; margin-top: 0.5rem; font-weight: 500;">Pending payout: KES 6,200</p>
+          </div>
+          <div style="background: linear-gradient(145deg, #f8fafc, #f1f5f9); border-radius: 1.5rem; padding: 1.25rem 1.5rem; box-shadow: 0 4px 12px rgba(0,0,0,0.02), 0 1px 2px rgba(0,0,0,0.05); border: 1px solid #e9eef3;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #2c6e9e;">Member Since</span>
+              <span style="font-size: 1.8rem;">📅</span>
+            </div>
+            <p style="font-size: 1.6rem; font-weight: 700; color: #0a2c48; margin-top: 0.5rem;">2019</p>
+            <p style="color: #4a627a; font-size: 0.8rem; margin-top: 0.5rem;">5 years of growth</p>
+          </div>
+        </div>
+
+        <!-- Two-column layout: Recent Transactions & Quick Actions -->
+        <div style="display: grid; grid-template-columns: 1fr 0.9fr; gap: 2rem; margin-bottom: 2rem;">
+          <!-- Recent Transactions -->
+          <div style="background: #fcfdfe; border-radius: 1.25rem; border: 1px solid #eef2f8; padding: 1.5rem;">
+            <h3 style="font-size: 1.25rem; font-weight: 700; color: #0a2c48; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">📋 Recent Transactions</h3>
+            <div style="display: flex; flex-direction: column; gap: 1rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ecf3fa; padding-bottom: 0.75rem;">
+                <div><span style="font-weight: 600;">Share Contribution</span><br><span style="font-size: 0.7rem; color: #6c86a3;">Mar 15, 2025</span></div>
+                <span style="font-weight: 700; color: #2b6e3c;">+KES 10,000</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ecf3fa; padding-bottom: 0.75rem;">
+                <div><span style="font-weight: 600;">Loan Repayment</span><br><span style="font-size: 0.7rem; color: #6c86a3;">Mar 10, 2025</span></div>
+                <span style="font-weight: 700; color: #b85c00;">-KES 5,200</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ecf3fa; padding-bottom: 0.75rem;">
+                <div><span style="font-weight: 600;">Dividend Payout</span><br><span style="font-size: 0.7rem; color: #6c86a3;">Feb 28, 2025</span></div>
+                <span style="font-weight: 700; color: #2b6e3c;">+KES 8,400</span>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div><span style="font-weight: 600;">Emergency Loan Disbursement</span><br><span style="font-size: 0.7rem; color: #6c86a3;">Feb 10, 2025</span></div>
+                <span style="font-weight: 700; color: #2b6e3c;">+KES 30,000</span>
+              </div>
+            </div>
+            <button style="margin-top: 1.5rem; background: transparent; border: 1px solid #cbdde9; padding: 0.5rem 1rem; border-radius: 40px; font-weight: 500; font-size: 0.8rem; cursor: pointer; color: #2c6e9e; transition: all 0.2s;">View All Transactions →</button>
+          </div>
+
+          <!-- Quick Actions -->
+          <div style="background: #fcfdfe; border-radius: 1.25rem; border: 1px solid #eef2f8; padding: 1.5rem;">
+            <h3 style="font-size: 1.25rem; font-weight: 700; color: #0a2c48; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">⚡ Quick Actions</h3>
+            <div style="display: flex; flex-direction: column; gap: 0.9rem;">
+              <button style="background: #0a2c48; border: none; padding: 0.85rem 1rem; border-radius: 1rem; color: white; font-weight: 600; display: flex; align-items: center; justify-content: space-between; cursor: pointer; transition: all 0.2s; width: 100%;">
+                <span>➕ Contribute to Shares</span>
+                <span>→</span>
+              </button>
+              <button style="background: #1d5b8e; border: none; padding: 0.85rem 1rem; border-radius: 1rem; color: white; font-weight: 600; display: flex; align-items: center; justify-content: space-between; cursor: pointer; transition: all 0.2s; width: 100%;">
+                <span>📄 Apply for Loan</span>
+                <span>→</span>
+              </button>
+              <button style="background: #2d6a4f; border: none; padding: 0.85rem 1rem; border-radius: 1rem; color: white; font-weight: 600; display: flex; align-items: center; justify-content: space-between; cursor: pointer; transition: all 0.2s; width: 100%;">
+                <span>📊 Dividend Reinvestment</span>
+                <span>→</span>
+              </button>
+              <button style="background: #b45353; border: none; padding: 0.85rem 1rem; border-radius: 1rem; color: white; font-weight: 600; display: flex; align-items: center; justify-content: space-between; cursor: pointer; transition: all 0.2s; width: 100%;">
+                <span>📞 Member Support</span>
+                <span>→</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Loan summary and upcoming payments section -->
+        <div style="background: linear-gradient(115deg, #f0f6fe 0%, #ffffff 100%); border-radius: 1.5rem; padding: 1.5rem; border: 1px solid #e2edf7;">
+          <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <h3 style="font-size: 1.2rem; font-weight: 700; color: #0a2c48;">📌 Loan Repayment Schedule</h3>
+            <span style="background: #e6f2fc; padding: 0.25rem 1rem; border-radius: 30px; font-size: 0.75rem; font-weight: 600; color: #2c6e9e;">Next due: Apr 5, 2025</span>
+          </div>
+          <div style="height: 10px; background: #e2eaf2; border-radius: 20px; overflow: hidden; margin: 0.75rem 0 0.5rem;">
+            <div style="width: 34%; background: #2c6e9e; height: 10px; border-radius: 20px;"></div>
+          </div>
+          <div style="display: flex; justify-content: space-between; margin-top: 0.5rem;">
+            <span style="font-size: 0.85rem; color: #2c3e50;">Principal paid: 34%</span>
+            <span style="font-size: 0.85rem; font-weight: 600;">Remaining: KES 42,300</span>
+          </div>
+          <div style="margin-top: 1.25rem; background: #ffffff; border-radius: 1rem; padding: 1rem;">
+            <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+              <div><span style="font-size: 0.7rem; color: #5f7f9e;">Monthly Installment</span><br><strong>KES 4,850</strong></div>
+              <div><span style="font-size: 0.7rem; color: #5f7f9e;">Interest Rate</span><br><strong>12% p.a.</strong></div>
+              <div><span style="font-size: 0.7rem; color: #5f7f9e;">Loan Maturity</span><br><strong>Nov 2026</strong></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer / additional info -->
+        <div style="margin-top: 2rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; border-top: 1px solid #eef2f8; padding-top: 1.5rem;">
+          <div style="display: flex; gap: 1rem; align-items: center;">
+            <img src="log.png" alt="Metro Sacco" style="height: 32px; width: auto; border-radius: 6px;" onerror="this.style.display='none';">
+            <span style="font-size: 0.75rem; color: #6f8fae;">© 2025 Metro Sacco Society Ltd — Secure Member Portal</span>
+          </div>
+          <div style="display: flex; gap: 1.5rem;">
+            <span style="font-size: 0.75rem; color: #2c6e9e; cursor: pointer;">Privacy Policy</span>
+            <span style="font-size: 0.75rem; color: #2c6e9e; cursor: pointer;">Terms of Service</span>
+            <span style="font-size: 0.75rem; color: #2c6e9e; cursor: pointer;">Help Center</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- No React service worker or manifest references — clean portal with log.png as primary icon -->
+</body>
 </html>
