@@ -68,7 +68,7 @@ function ShareCapital() {
   // Fetch header configuration
   const fetchHeaderConfig = async (token) => {
     try {
-      const response = await fetch('https://memberportal.metro-sacco.com/api/v1/header/1', {
+      const response = await fetch('/api/v1/header/1', {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -156,7 +156,7 @@ function ShareCapital() {
         await fetchHeaderConfig(token);
         
         // Fetch member data
-        const memberResponse = await fetch(`https://memberportal.metro-sacco.com/api/v1/member/${memberNumber}`, {
+        const memberResponse = await fetch(`/api/v1/member/${memberNumber}`, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -179,7 +179,7 @@ function ShareCapital() {
         }
         
         // Fetch share capital data from correct endpoint
-        const shareUrl = `https://memberportal.metro-sacco.com/api/v1/shareCapital/${memberNumber}`;
+        const shareUrl = `/api/v1/shareCapital/${memberNumber}`;
         console.log('Fetching share capital from:', shareUrl);
         
         const shareResponse = await fetch(shareUrl, {

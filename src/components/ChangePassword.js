@@ -34,7 +34,7 @@ const ChangePassword = () => {
     setError('');
     
     try {
-      const response = await fetch('https://memberportal.metro-sacco.com/api/v1/auth/registerOtp', {
+      const response = await fetch('/api/v1/auth/registerOtp', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
