@@ -75,7 +75,7 @@ class AuthService {
   async refreshToken() {
     // Implement token refresh logic if your backend supports it
     try {
-      const response = await fetch('https://memberportal.metro-sacco.com/api/v1/auth/refresh', {
+      const response = await fetch('/api/v1/auth/refresh', {
         method: 'POST',
         credentials: 'include',
       });

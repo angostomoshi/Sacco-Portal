@@ -78,7 +78,7 @@ function WithdrawableStmt() {
   // Fetch header configuration
   const fetchHeaderConfig = async (token) => {
     try {
-      const response = await fetch('https://memberportal.metro-sacco.com/api/v1/header/1', {
+      const response = await fetch('/api/v1/header/1', {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -325,7 +325,7 @@ function WithdrawableStmt() {
         
         // IMPORTANT: Fetch member profile for complete contact information
         try {
-          const memberResponse = await fetch(`https://memberportal.metro-sacco.com/api/v1/member/${memberNumber}`, {
+          const memberResponse = await fetch(`/api/v1/member/${memberNumber}`, {
             method: 'GET',
             headers: {
               'Content-Type': 'application/json',
@@ -346,7 +346,7 @@ function WithdrawableStmt() {
         }
         
         // Fetch withdrawable data
-        const withdrawableUrl = `https://memberportal.metro-sacco.com/api/v1/withDrawable/${memberNumber}`;
+        const withdrawableUrl = `/api/v1/withDrawable/${memberNumber}`;
         console.log('Fetching from:', withdrawableUrl);
         
         const response = await fetch(withdrawableUrl, {

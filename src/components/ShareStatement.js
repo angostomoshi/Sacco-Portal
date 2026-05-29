@@ -69,7 +69,7 @@ function ShareStatement() {
   // Fetch header configuration
   const fetchHeaderConfig = async (token) => {
     try {
-      const response = await fetch('https://memberportal.metro-sacco.com/api/v1/header/1', {
+      const response = await fetch('/api/v1/header/1', {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -157,7 +157,7 @@ function ShareStatement() {
         await fetchHeaderConfig(token);
         
         // Fetch member data
-        const memberResponse = await fetch(`https://memberportal.metro-sacco.com/api/v1/member/${memberNumber}`, {
+        const memberResponse = await fetch(`/api/v1/member/${memberNumber}`, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -180,7 +180,7 @@ function ShareStatement() {
         }
         
         // Fetch savings data from correct endpoint
-        const savingsUrl = `https://memberportal.metro-sacco.com/api/v1/savings/${memberNumber}`;
+        const savingsUrl = `/api/v1/savings/${memberNumber}`;
         console.log('Fetching savings from:', savingsUrl);
         
         const savingsResponse = await fetch(savingsUrl, {

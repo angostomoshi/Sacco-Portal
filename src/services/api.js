@@ -1,5 +1,5 @@
 // API service to handle all backend communications
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://memberportal.metro-sacco.com';
+const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
 class ApiService {
   constructor() {
