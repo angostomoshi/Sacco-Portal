@@ -48,7 +48,7 @@ const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
         }
         
         if (onLogin) {
-          onLogin(data);
+          onLogin(memberNumber.trim());
         } else {
           navigate('/dashboard');
         }

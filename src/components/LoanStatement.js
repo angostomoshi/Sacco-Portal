@@ -51,7 +51,7 @@ function LoanStatement() {
   // Fetch header config
   const fetchHeaderConfig = async (token) => {
     try {
-      const response = await fetch('https://memberportal.metro-sacco.com/api/v1/header/1', {
+      const response = await fetch('/api/v1/header/1', {
         method: 'GET',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
       });
@@ -124,7 +124,7 @@ function LoanStatement() {
         
         // Fetch member data
         try {
-          const memberResponse = await fetch(`https://memberportal.metro-sacco.com/api/v1/member/${memberNumber}`, {
+          const memberResponse = await fetch(`/api/v1/member/${memberNumber}`, {
             method: 'GET',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
           });
@@ -139,7 +139,7 @@ function LoanStatement() {
         }
         
         // Fetch loan data from instant endpoint
-        const instantUrl = `https://memberportal.metro-sacco.com/api/v1/instant/${memberNumber}`;
+        const instantUrl = `/api/v1/instant/${memberNumber}`;
         console.log('Fetching from:', instantUrl);
         
         const instantResponse = await fetch(instantUrl, {

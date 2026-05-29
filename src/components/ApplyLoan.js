@@ -43,7 +43,7 @@ function ApplyLoan() {
           return;
         }
         
-        const response = await fetch(`https://memberportal.metro-sacco.com/api/v1/member/${memberNumber}`, {
+        const response = await fetch(`/api/v1/member/${memberNumber}`, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',

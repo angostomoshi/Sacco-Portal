@@ -4,16 +4,12 @@ module.exports = function(app) {
   app.use(
     '/api',
     createProxyMiddleware({
-      target: 'https://memberportal.metro-sacco.com',
+      target: 'http://192.168.4.6:3023',
       changeOrigin: true,
       secure: false,
       logLevel: 'debug',
-      headers: {
-        'Origin': 'https://memberportal.metro-sacco.com',
-        'Referer': 'https://memberportal.metro-sacco.com/'
-      },
       onProxyReq: (proxyReq, req, res) => {
-        console.log(`[PROXY] Forwarding: ${req.method} ${req.url} -> https://memberportal.metro-sacco.com${req.url}`);
+        console.log(`[PROXY] Forwarding: ${req.method} ${req.url} -> http://192.168.4.6:3023${req.url}`);
       },
       onError: (err, req, res) => {
         console.error('[PROXY ERROR]', err.message);

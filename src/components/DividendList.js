@@ -78,7 +78,7 @@ function DividendList() {
   // Fetch header configuration
   const fetchHeaderConfig = async (token) => {
     try {
-      const response = await fetch('https://memberportal.metro-sacco.com/api/v1/header/1', {
+      const response = await fetch('/api/v1/header/1', {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -163,7 +163,7 @@ function DividendList() {
         
         // Fetch member profile (works with 200 OK)
         console.log('Fetching member data for:', memberNumber);
-        const memberResponse = await fetch(`https://memberportal.metro-sacco.com/api/v1/member/${memberNumber}`, {
+        const memberResponse = await fetch(`/api/v1/member/${memberNumber}`, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -200,7 +200,7 @@ function DividendList() {
         }
         
         // *** CORRECT ENDPOINT - Using singular 'dividend' not 'dividends' ***
-        const dividendUrl = `https://memberportal.metro-sacco.com/api/v1/dividend/${memberNumber}`;
+        const dividendUrl = `/api/v1/dividend/${memberNumber}`;
         console.log('Fetching dividend data from:', dividendUrl);
         
         try {
@@ -231,7 +231,7 @@ function DividendList() {
             // If 403 or other error, try with a different approach
             if (dividendResponse.status === 403) {
               console.log('Got 403, trying alternative endpoint...');
-              const altUrl = `https://memberportal.metro-sacco.com/api/v1/dividend/MS967`;
+              const altUrl = `/api/v1/dividend/MS967`;
               const altResponse = await fetch(altUrl, {
                 method: 'GET',
                 headers: {

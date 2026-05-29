@@ -215,7 +215,7 @@ function App() {
     try {
       // Fetch user data from your API using account number or ID
       // identifier can be accNo like "MS967" or id like 1143
-      const response = await fetch(`http://localhost:3000/api/v1/member/${identifier}`);
+      const response = await fetch(`/api/v1/member/${identifier}`);
       
       if (response.ok) {
         const userData = await response.json();
