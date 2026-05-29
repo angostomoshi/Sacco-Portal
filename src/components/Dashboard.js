@@ -7,7 +7,7 @@ const Dashboard = ({ userData }) => {
   const infoCards = [
     {
       id: 1,
-      title: '🔑 ACCESS INFORMATION',
+      title: 'ACCESS INFORMATION',
       content: 'Enter your ID No. to access Sacco info. Check Share, Dividend, Guarantorship, Loan statements.',
       icon: '🔑',
       badge: 'Essential',
@@ -15,15 +15,15 @@ const Dashboard = ({ userData }) => {
     },
     {
       id: 2,
-      title: '📞 SUPPORT CONTACT',
+      title: 'SUPPORT CONTACT',
       content: 'Contact Dan on 0785278786 or email: sacco@metro-hospital.com.',
-      icon: '📱',
+      icon: '📞',
       badge: 'Support',
       badgeColor: '#e53e3e'
     },
     {
       id: 3,
-      title: '📈 DIVIDEND INFO',
+      title: 'DIVIDEND INFO',
       content: 'Dividends apply to LAST Year\'s shares, NOT current year shares.',
       icon: '💰',
       badge: 'Finance',
@@ -31,7 +31,7 @@ const Dashboard = ({ userData }) => {
     },
     {
       id: 4,
-      title: '📋 WHT INFORMATION',
+      title: 'WHT INFORMATION',
       content: 'WHT only applies to those who tick to be paid dividends.',
       icon: '📊',
       badge: 'Tax',
@@ -39,7 +39,7 @@ const Dashboard = ({ userData }) => {
     },
     {
       id: 5,
-      title: '📱 MOBILE NUMBER',
+      title: 'MOBILE NUMBER',
       content: 'Confirm your mobile number - dividends paid through indicated number.',
       icon: '✉️',
       badge: 'Profile',
@@ -47,7 +47,7 @@ const Dashboard = ({ userData }) => {
     },
     {
       id: 6,
-      title: '⭐ MEMBER BENEFITS',
+      title: 'MEMBER BENEFITS',
       content: 'Access low-interest loans, earn competitive dividends, flexible repayment.',
       icon: '🎁',
       badge: 'Perks',
@@ -55,37 +55,57 @@ const Dashboard = ({ userData }) => {
     }
   ];
 
+  // Get member number safely
+  const getMemberNumber = () => {
+    if (userData?.memberNo) return userData.memberNo;
+    if (userData?.memberNumber) return userData.memberNumber;
+    if (userData?.accNo) return userData.accNo;
+    return localStorage.getItem('memberNumber') || 'User';
+  };
+
   useEffect(() => {
     if (userData) {
-      console.log('Welcome back, Member:', userData.memberNo || 'User');
+      console.log('Welcome back, Member:', getMemberNumber());
+    } else {
+      // Try to get from localStorage if not passed as prop
+      const storedData = localStorage.getItem('userData');
+      if (storedData) {
+        try {
+          const parsedData = JSON.parse(storedData);
+          console.log('Welcome back, Member:', parsedData.memberNo || parsedData.memberNumber || 'User');
+        } catch (e) {
+          console.log('Welcome back, Member!');
+        }
+      }
     }
   }, [userData]);
 
   return (
     <div className="dashboard-wrapper">
-      {/* Header - Minimal spacing to keep cards high */}
-      <div className="dashboard-header">
-        {userData && (
-          <p className="welcome-text">
-            Welcome back, Member {userData.memberNo || userData.memberNumber || 'User'}
-          </p>
-        )}
-      </div>
-
-      {/* Cards Grid - Positioned at the very top */}
+      {/* Removed the welcome message from here - now it's in the top bar */}
+      
       <div className="cards-grid">
-        {infoCards.map((card) => (
-          <div key={card.id} className="info-card">
-            <div className="card-top">
-              <div className="card-icon" style={{ backgroundColor: `${brandColor}10`, color: brandColor }}>
-                {card.icon}
+        {infoCards.map((card, index) => (
+          <div key={card.id} className="info-card" style={{ '--card-index': index }}>
+            <div className="card-glow" style={{ background: `linear-gradient(90deg, ${card.badgeColor}40, ${brandColor}40, ${card.badgeColor}40)` }}></div>
+            <div className="card-inner">
+              <div className="card-top">
+                <div className="card-icon-wrapper">
+                  <div className="card-icon-bg" style={{ background: `linear-gradient(135deg, ${card.badgeColor}20, ${brandColor}20)` }}>
+                    <span className="card-icon">{card.icon}</span>
+                  </div>
+                </div>
+                <div className="card-badge" style={{ backgroundColor: card.badgeColor }}>
+                  {card.badge}
+                </div>
               </div>
-              <div className="card-badge" style={{ backgroundColor: card.badgeColor }}>
-                {card.badge}
-              </div>
+              <h3 className="card-title">
+                <span className="title-dot" style={{ backgroundColor: card.badgeColor }}></span>
+                {card.title}
+              </h3>
+              <p className="card-content">{card.content}</p>
+              <div className="card-hover-effect" style={{ background: `linear-gradient(135deg, ${card.badgeColor}08, ${brandColor}08)` }}></div>
             </div>
-            <h3 className="card-title">{card.title}</h3>
-            <p className="card-content">{card.content}</p>
           </div>
         ))}
       </div>
@@ -104,61 +124,82 @@ const Dashboard = ({ userData }) => {
         .dashboard-wrapper {
           min-height: 100vh;
           width: 100%;
-          background: linear-gradient(135deg, #f5f7fa 0%, #eef2f7 100%);
-          padding: 0.75rem 2rem 2rem 2rem;  /* Minimal top padding */
+          background: #f8f9fa;
+          padding: 2rem;
           display: flex;
           flex-direction: column;
+          position: relative;
         }
 
-        /* Header Styles - Almost no margin */
-        .dashboard-header {
-          text-align: center;
-          margin-bottom: 0.25rem;  /* Very small margin */
-        }
-
-        .dashboard-title {
-          font-size: 1.8rem;
-          font-weight: 800;
-          background: linear-gradient(135deg, #1a202c 0%, #2d3748 100%);
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
-          background-clip: text;
-          letter-spacing: -0.5px;
-          margin-bottom: 0.5rem;
-        }
-
-        .welcome-text {
-          color: #4a5568;
-          font-size: 0.85rem;
-          font-weight: 500;
-        }
-
-        /* Cards Grid - No top margin, flush with header */
+        /* Cards Grid */
         .cards-grid {
           display: grid;
           grid-template-columns: repeat(3, 1fr);
           gap: 1.5rem;
           width: 100%;
           max-width: 1400px;
-          margin: 0 auto;  /* No top margin */
+          margin: 0 auto;
+          position: relative;
+          z-index: 1;
         }
 
-        /* Individual Card */
+        /* Modern Card Design */
         .info-card {
+          position: relative;
           background: white;
-          border-radius: 20px;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-          transition: all 0.3s ease;
-          border: 1px solid rgba(0, 163, 181, 0.1);
-          display: flex;
-          flex-direction: column;
-          padding: 1.25rem;
+          border-radius: 24px;
+          overflow: hidden;
+          transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+          cursor: pointer;
+          animation: cardFloatIn 0.5s ease-out forwards;
+          animation-delay: calc(var(--card-index) * 0.05s);
+          opacity: 0;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+          border: 1px solid rgba(0, 0, 0, 0.05);
+        }
+
+        .info-card::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: -100%;
+          width: 100%;
+          height: 100%;
+          background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+          transition: left 0.5s;
+          z-index: 2;
+          pointer-events: none;
+        }
+
+        .info-card:hover::before {
+          left: 100%;
         }
 
         .info-card:hover {
-          transform: translateY(-3px);
-          box-shadow: 0 12px 24px rgba(0, 163, 181, 0.12);
-          border-color: rgba(0, 163, 181, 0.2);
+          transform: translateY(-8px) scale(1.02);
+          box-shadow: 0 20px 30px -12px rgba(0, 0, 0, 0.15);
+        }
+
+        .card-glow {
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          height: 4px;
+          background-size: 200% 100%;
+          animation: gradientShift 3s ease infinite;
+          opacity: 0.8;
+        }
+
+        @keyframes gradientShift {
+          0%, 100% { background-position: 0% 50%; }
+          50% { background-position: 100% 50%; }
+        }
+
+        .card-inner {
+          padding: 1.5rem;
+          position: relative;
+          z-index: 1;
         }
 
         /* Card Top Section */
@@ -166,32 +207,47 @@ const Dashboard = ({ userData }) => {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          margin-bottom: 1rem;
+          margin-bottom: 1.25rem;
         }
 
-        .card-icon {
-          width: 48px;
-          height: 48px;
-          border-radius: 16px;
+        .card-icon-wrapper {
+          position: relative;
+        }
+
+        .card-icon-bg {
+          width: 56px;
+          height: 56px;
+          border-radius: 18px;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 1.4rem;
-          transition: transform 0.2s ease;
+          transition: all 0.3s ease;
+          box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
         }
 
-        .info-card:hover .card-icon {
-          transform: scale(1.05);
+        .info-card:hover .card-icon-bg {
+          transform: rotate(5deg) scale(1.05);
+          box-shadow: 0 8px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .card-icon {
+          font-size: 1.8rem;
         }
 
         .card-badge {
-          padding: 0.3rem 0.8rem;
-          border-radius: 30px;
-          font-size: 0.65rem;
+          padding: 0.35rem 0.9rem;
+          border-radius: 50px;
+          font-size: 0.7rem;
           font-weight: 700;
           color: white;
           letter-spacing: 0.5px;
           text-transform: uppercase;
+          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+          transition: transform 0.2s;
+        }
+
+        .info-card:hover .card-badge {
+          transform: scale(1.05);
         }
 
         /* Card Title */
@@ -200,56 +256,114 @@ const Dashboard = ({ userData }) => {
           font-weight: 800;
           color: #1a202c;
           margin-bottom: 0.75rem;
-          line-height: 1.3;
+          line-height: 1.4;
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+        }
+
+        .title-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          display: inline-block;
+          animation: pulse 2s ease infinite;
+        }
+
+        @keyframes pulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.5; transform: scale(0.8); }
         }
 
         /* Card Content */
         .card-content {
           font-size: 0.85rem;
           color: #4a5568;
-          line-height: 1.5;
+          line-height: 1.6;
           margin: 0;
+          position: relative;
+          z-index: 1;
+        }
+
+        /* Hover Effect Line */
+        .card-hover-effect {
+          position: absolute;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          height: 0;
+          transition: height 0.3s ease;
+          z-index: 0;
+          pointer-events: none;
+        }
+
+        .info-card:hover .card-hover-effect {
+          height: 100%;
         }
 
         /* Footer */
         .dashboard-footer {
-          margin-top: 1.5rem;
+          margin-top: 2rem;
           padding-top: 1rem;
           text-align: center;
           color: #a0aec0;
-          font-size: 0.7rem;
+          font-size: 0.75rem;
+          position: relative;
+          z-index: 1;
           border-top: 1px solid #e2e8f0;
         }
 
-        /* Responsive */
-        @media (max-width: 1024px) {
-          .dashboard-wrapper {
-            padding: 0.5rem 1.5rem 1.5rem 1.5rem;
+        /* Animations */
+        @keyframes cardFloatIn {
+          from {
+            opacity: 0;
+            transform: translateY(30px);
           }
-          
-          .cards-grid {
-            gap: 1.25rem;
-          }
-          
-          .dashboard-title {
-            font-size: 1.5rem;
-          }
-          
-          .dashboard-header {
-            margin-bottom: 0.2rem;
+          to {
+            opacity: 1;
+            transform: translateY(0);
           }
         }
 
-        @media (max-width: 900px) {
+        /* Responsive Design */
+        @media (max-width: 1200px) {
+          .cards-grid {
+            gap: 1.25rem;
+          }
+        }
+
+        @media (max-width: 968px) {
+          .dashboard-wrapper {
+            padding: 1.5rem;
+          }
+          
           .cards-grid {
             grid-template-columns: repeat(2, 1fr);
-            gap: 1rem;
+            gap: 1.25rem;
+          }
+          
+          .card-icon-bg {
+            width: 48px;
+            height: 48px;
           }
           
           .card-icon {
-            width: 44px;
-            height: 44px;
-            font-size: 1.3rem;
+            font-size: 1.5rem;
+          }
+        }
+
+        @media (max-width: 640px) {
+          .dashboard-wrapper {
+            padding: 1rem;
+          }
+          
+          .cards-grid {
+            grid-template-columns: 1fr;
+            gap: 1rem;
+          }
+          
+          .card-inner {
+            padding: 1.25rem;
           }
           
           .card-title {
@@ -259,102 +373,7 @@ const Dashboard = ({ userData }) => {
           .card-content {
             font-size: 0.8rem;
           }
-          
-          .dashboard-wrapper {
-            padding: 0.5rem 1rem 1rem 1rem;
-          }
         }
-
-        @media (max-width: 550px) {
-          .dashboard-wrapper {
-            padding: 0.35rem 1rem 1rem 1rem;
-          }
-          
-          .cards-grid {
-            grid-template-columns: 1fr;
-            gap: 1rem;
-          }
-          
-          .dashboard-title {
-            font-size: 1.3rem;
-          }
-          
-          .welcome-text {
-            font-size: 0.75rem;
-          }
-          
-          .dashboard-header {
-            margin-bottom: 0.15rem;
-          }
-          
-          .card-icon {
-            width: 42px;
-            height: 42px;
-            font-size: 1.2rem;
-          }
-          
-          .card-title {
-            font-size: 0.9rem;
-          }
-          
-          .card-content {
-            font-size: 0.8rem;
-          }
-          
-          .info-card {
-            padding: 1rem;
-          }
-          
-          .dashboard-footer {
-            margin-top: 1rem;
-            padding-top: 0.75rem;
-          }
-        }
-
-        @media (min-width: 1400px) {
-          .cards-grid {
-            max-width: 1400px;
-            gap: 1.75rem;
-          }
-          
-          .card-icon {
-            width: 52px;
-            height: 52px;
-            font-size: 1.5rem;
-          }
-          
-          .card-title {
-            font-size: 1.1rem;
-          }
-          
-          .card-content {
-            font-size: 0.9rem;
-          }
-        }
-
-        /* Animation */
-        @keyframes cardFadeIn {
-          from {
-            opacity: 0;
-            transform: translateY(15px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-
-        .info-card {
-          animation: cardFadeIn 0.35s ease-out forwards;
-          opacity: 0;
-        }
-
-        .info-card:nth-child(1) { animation-delay: 0.05s; }
-        .info-card:nth-child(2) { animation-delay: 0.1s; }
-        .info-card:nth-child(3) { animation-delay: 0.15s; }
-        .info-card:nth-child(4) { animation-delay: 0.2s; }
-        .info-card:nth-child(5) { animation-delay: 0.25s; }
-        .info-card:nth-child(6) { animation-delay: 0.3s; }
       `}</style>
     </div>
   );

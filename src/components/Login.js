@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import logo from '../log.png';
 
+
 const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
   const navigate = useNavigate();
   const [memberNumber, setMemberNumber] = useState('');
@@ -23,7 +24,8 @@ const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
     setLoading(true);
     
     try {
-      const response = await fetch('/api/v1/auth/authenticate', {
+      // First, authenticate the user
+      const authResponse = await fetch('/api/v1/auth/authenticate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -36,24 +38,94 @@ const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
         })
       });
       
-      const data = await response.json();
+      const authData = await authResponse.json();
       
-      if (response.ok) {
-        localStorage.setItem('memberData', JSON.stringify(data));
+      if (authResponse.ok) {
+        // Store authentication data
         localStorage.setItem('memberNumber', memberNumber.trim());
         localStorage.setItem('isAuthenticated', 'true');
         
-        if (data.token) {
-          localStorage.setItem('authToken', data.token);
+        if (authData.token) {
+          localStorage.setItem('authToken', authData.token);
         }
         
-        if (onLogin) {
-          onLogin(data);
-        } else {
-          navigate('/dashboard');
+        // Now fetch the full member details using the member number
+        try {
+          const memberResponse = await fetch(`/api/v1/member/${memberNumber.trim()}`, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+              ...(authData.token && { 'Authorization': `Bearer ${authData.token}` })
+            }
+          });
+          
+          if (memberResponse.ok) {
+            const memberData = await memberResponse.json();
+            
+            // Store member details
+            localStorage.setItem('memberData', JSON.stringify(memberData));
+            
+            // Store holders name if available
+            if (memberData.holdersName) {
+              localStorage.setItem('holdersName', memberData.holdersName);
+              localStorage.setItem('userName', memberData.holdersName);
+            }
+            
+            // Store account number
+            if (memberData.accNo) {
+              localStorage.setItem('accountNo', memberData.accNo);
+            }
+            
+            // Create and store initials
+            if (memberData.holdersName) {
+              const names = memberData.holdersName.split(' ');
+              const initials = names.map(n => n[0]).join('').toUpperCase().substring(0, 2);
+              localStorage.setItem('userInitials', initials);
+            } else {
+              localStorage.setItem('userInitials', memberNumber.trim().substring(0, 2).toUpperCase());
+            }
+            
+            // Store member ID if available
+            if (memberData.id) {
+              localStorage.setItem('memberId', String(memberData.id));
+            }
+            
+            if (onLogin) {
+              onLogin(memberData);
+            } else {
+              navigate('/dashboard');
+            }
+          } else {
+            // If member details fetch fails, still allow login with basic info
+            console.warn('Could not fetch member details, using basic info');
+            localStorage.setItem('holdersName', `Member ${memberNumber.trim()}`);
+            localStorage.setItem('userName', `Member ${memberNumber.trim()}`);
+            localStorage.setItem('accountNo', memberNumber.trim());
+            localStorage.setItem('userInitials', memberNumber.trim().substring(0, 2).toUpperCase());
+            
+            if (onLogin) {
+              onLogin(authData);
+            } else {
+              navigate('/dashboard');
+            }
+          }
+        } catch (memberError) {
+          console.error('Error fetching member details:', memberError);
+          // Still allow login even if member details fetch fails
+          localStorage.setItem('holdersName', `Member ${memberNumber.trim()}`);
+          localStorage.setItem('userName', `Member ${memberNumber.trim()}`);
+          localStorage.setItem('accountNo', memberNumber.trim());
+          localStorage.setItem('userInitials', memberNumber.trim().substring(0, 2).toUpperCase());
+          
+          if (onLogin) {
+            onLogin(authData);
+          } else {
+            navigate('/dashboard');
+          }
         }
       } else {
-        setError(data.message || data.error || 'Invalid member number or password');
+        setError(authData.message || authData.error || 'Invalid member number or password');
       }
     } catch (err) {
       console.error('Login error:', err);
@@ -224,7 +296,6 @@ const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
     },
   };
 
-  // Add keyframes animation
   const keyframes = `
     @keyframes fadeInUp {
       from {

@@ -46,6 +46,10 @@ const Sidebar = ({ isOpen, onClose }) => {
     localStorage.removeItem('userName');
     localStorage.removeItem('userInitials');
     localStorage.removeItem('accountNo');
+    localStorage.removeItem('memberNumber');
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('holdersName');
+    navigate('/login');
     window.location.reload();
   };
 
@@ -56,7 +60,6 @@ const Sidebar = ({ isOpen, onClose }) => {
       <div className={`sidebar ${isOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <div className="logo">
-            {/* Logo image instead of text */}
             <img 
               src={logo} 
               alt="Sacco Logo" 
@@ -87,13 +90,14 @@ const Sidebar = ({ isOpen, onClose }) => {
   );
 };
 
-// Top Bar Component
+// Top Bar Component with Welcome Message showing actual name
 const TopBar = ({ onMenuToggle }) => {
   const [currentTime, setCurrentTime] = useState('');
   const [currentDate, setCurrentDate] = useState('');
   const [userName, setUserName] = useState('');
   const [userInitials, setUserInitials] = useState('');
   const [accountNo, setAccountNo] = useState('');
+  const [holdersName, setHoldersName] = useState('');
 
   useEffect(() => {
     const updateDateTime = () => {
@@ -109,29 +113,32 @@ const TopBar = ({ onMenuToggle }) => {
     const storedUserName = localStorage.getItem('userName');
     const storedUserInitials = localStorage.getItem('userInitials');
     const storedAccountNo = localStorage.getItem('accountNo');
+    const storedMemberNumber = localStorage.getItem('memberNumber');
+    const storedHoldersName = localStorage.getItem('holdersName');
+    
+    setAccountNo(storedAccountNo || storedMemberNumber || '');
     
     if (storedUserData) {
       try {
         const userData = JSON.parse(storedUserData);
-        setUserName(userData.holdersName || 'Member');
-        setAccountNo(userData.accNo || '');
+        // Get the holders name from the API response
+        const name = userData.holdersName || userData.name || storedHoldersName || 'Member';
+        setHoldersName(name);
+        setUserName(name);
+        
         // Create initials from holdersName
-        if (userData.holdersName) {
-          const names = userData.holdersName.split(' ');
-          const initials = names.map(n => n[0]).join('').toUpperCase().substring(0, 2);
-          setUserInitials(initials);
-        } else {
-          setUserInitials('MB');
-        }
+        const names = name.split(' ');
+        const initials = names.map(n => n[0]).join('').toUpperCase().substring(0, 2);
+        setUserInitials(initials);
       } catch (e) {
+        setHoldersName(storedHoldersName || storedUserName || 'Member');
         setUserName(storedUserName || 'Member');
         setUserInitials(storedUserInitials || 'MB');
-        setAccountNo(storedAccountNo || '');
       }
     } else {
+      setHoldersName(storedHoldersName || storedUserName || 'Member');
       setUserName(storedUserName || 'Member');
       setUserInitials(storedUserInitials || 'MB');
-      setAccountNo(storedAccountNo || '');
     }
     
     return () => clearInterval(interval);
@@ -152,6 +159,14 @@ const TopBar = ({ onMenuToggle }) => {
     return 'Dashboard';
   };
 
+  // Get first name only for welcome message
+  const getFirstName = () => {
+    if (holdersName && holdersName !== 'Member') {
+      return holdersName.split(' ')[0]; // Returns "PETER"
+    }
+    return `Member ${accountNo}`;
+  };
+
   return (
     <div className="top-bar">
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
@@ -161,10 +176,16 @@ const TopBar = ({ onMenuToggle }) => {
         <div className="page-title">{getPageTitle()}</div>
       </div>
       <div className="header-right">
+        {/* Welcome Message with actual name */}
+        <div className="welcome-message">
+          Welcome back, {getFirstName()} {holdersName !== 'Member' && holdersName !== getFirstName() ? `(${accountNo})` : ''}
+        </div>
+        
         <div className="datetime">
           <div className="time">{currentTime}</div>
           <div className="date">{currentDate}</div>
         </div>
+        
         <div className="user-dropdown">
           <div className="user-info">
             <div className="name">{userName}</div>
@@ -211,44 +232,68 @@ function App() {
     return localStorage.getItem('isAuthenticated') === 'true';
   });
 
-  const handleLogin = async (identifier) => {
+  // handleLogin now properly handles the data from Login component
+  const handleLogin = async (userDataFromLogin) => {
     try {
-      // Fetch user data from your API using account number or ID
-      // identifier can be accNo like "MS967" or id like 1143
-      const response = await fetch(`http://localhost:3000/api/v1/member/${identifier}`);
+      console.log('Login successful, user data:', userDataFromLogin);
       
-      if (response.ok) {
-        const userData = await response.json();
+      // The Login component already stores the data in localStorage
+      // We just need to read it and ensure it's properly set
+      const storedMemberNumber = localStorage.getItem('memberNumber');
+      const storedMemberData = localStorage.getItem('memberData');
+      const storedAuthToken = localStorage.getItem('authToken');
+      
+      console.log('Stored member number:', storedMemberNumber);
+      console.log('Stored auth token:', storedAuthToken);
+      
+      if (storedMemberData) {
+        const memberData = JSON.parse(storedMemberData);
         
-        // Store user data in localStorage
-        localStorage.setItem('isAuthenticated', 'true');
-        localStorage.setItem('userData', JSON.stringify(userData));
-        localStorage.setItem('userName', userData.holdersName);
-        localStorage.setItem('accountNo', userData.accNo);
+        // Store additional user data for the app
+        localStorage.setItem('userData', storedMemberData);
+        localStorage.setItem('userName', memberData.holdersName || memberData.name || `Member ${storedMemberNumber}`);
+        localStorage.setItem('accountNo', memberData.accNo || memberData.memberNo || storedMemberNumber);
+        localStorage.setItem('holdersName', memberData.holdersName || memberData.name || '');
         
-        // Create initials from holdersName
-        if (userData.holdersName) {
-          const names = userData.holdersName.split(' ');
-          const initials = names.map(n => n[0]).join('').toUpperCase().substring(0, 2);
-          localStorage.setItem('userInitials', initials);
-        } else {
-          localStorage.setItem('userInitials', 'MB');
-        }
-        
-        setIsAuthenticated(true);
-        navigate('/');
+        // Create initials
+        const nameToUse = memberData.holdersName || memberData.name || `Member ${storedMemberNumber}`;
+        const names = nameToUse.split(' ');
+        const initials = names.map(n => n[0]).join('').toUpperCase().substring(0, 2);
+        localStorage.setItem('userInitials', initials);
       } else {
-        console.error('Failed to fetch user data');
-        // Fallback to default values if API fails
-        localStorage.setItem('isAuthenticated', 'true');
-        localStorage.setItem('userName', 'Member');
-        localStorage.setItem('userInitials', 'MB');
-        setIsAuthenticated(true);
-        navigate('/');
+        // Fallback - try to fetch member data
+        try {
+         const response = await fetch(`/api/v1/member/${storedMemberNumber}`);
+          if (response.ok) {
+            const memberData = await response.json();
+            localStorage.setItem('userData', JSON.stringify(memberData));
+            localStorage.setItem('userName', memberData.holdersName || `Member ${storedMemberNumber}`);
+            localStorage.setItem('accountNo', memberData.accNo || storedMemberNumber);
+            localStorage.setItem('holdersName', memberData.holdersName || '');
+            
+            const names = (memberData.holdersName || `Member ${storedMemberNumber}`).split(' ');
+            const initials = names.map(n => n[0]).join('').toUpperCase().substring(0, 2);
+            localStorage.setItem('userInitials', initials);
+          } else {
+            localStorage.setItem('userName', `Member ${storedMemberNumber}`);
+            localStorage.setItem('accountNo', storedMemberNumber || '');
+            localStorage.setItem('userInitials', 'MB');
+            localStorage.setItem('holdersName', '');
+          }
+        } catch (error) {
+          console.error('Error fetching member data:', error);
+          localStorage.setItem('userName', `Member ${storedMemberNumber}`);
+          localStorage.setItem('accountNo', storedMemberNumber || '');
+          localStorage.setItem('userInitials', 'MB');
+          localStorage.setItem('holdersName', '');
+        }
       }
+      
+      setIsAuthenticated(true);
+      navigate('/');
     } catch (error) {
-      console.error('Error fetching user data:', error);
-      // Fallback to default values if API fails
+      console.error('Error processing login data:', error);
+      // Fallback authentication
       localStorage.setItem('isAuthenticated', 'true');
       localStorage.setItem('userName', 'Member');
       localStorage.setItem('userInitials', 'MB');
@@ -284,7 +329,7 @@ function App() {
   return (
     <MainLayout>
       <Routes>
-        <Route path="/" element={<Dashboard />} />
+        <Route path="/" element={<Dashboard userData={JSON.parse(localStorage.getItem('userData') || '{}')} />} />
         <Route path="/profile" element={<MemberProfile />} />
         <Route path="/apply-loan" element={<ApplyLoan />} />
         <Route path="/dividends" element={<DividendList />} />

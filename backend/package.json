@@ -1,0 +1,10 @@
+{
+  "scripts": {
+    "start": "react-scripts start",
+    "proxy-server": "node proxy-server.js",
+    "dev": "concurrently \"npm run proxy-server\" \"npm start\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

@@ -2,12 +2,16 @@
   "name": "metro-sacco-portal",
   "version": "1.0.0",
   "private": true,
+  "proxy": "http://localhost:3023",
   "dependencies": {
-    "axios": "^1.16.0",
+    "axios": "^1.16.1",
     "chart.js": "^4.5.1",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
     "html2canvas": "^1.4.1",
     "jspdf": "^2.5.1",
-    "pg": "^8.20.0",
+    "pdfkit": "^0.18.0",
+    "pg": "^8.21.0",
     "react": "^18.2.0",
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^18.2.0",
@@ -17,13 +21,16 @@
     "web-vitals": "^2.1.4"
   },
   "devDependencies": {
-    "http-proxy-middleware": "^2.0.6"
+    "concurrently": "^8.2.2",
+    "http-proxy-middleware": "^2.0.9"
   },
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "proxy-server": "node proxy-server.js",
+    "dev": "concurrently \"npm run proxy-server\" \"npm start\""
   },
   "browserslist": {
     "production": [

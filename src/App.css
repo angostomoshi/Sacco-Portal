@@ -656,7 +656,130 @@ body {
     font-size: var(--text-xl);
   }
 }
+/* Welcome Message Styles */
+.welcome-message {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #27ae60;
+  background: #e8f5e9;
+  padding: 0.35rem 1rem;
+  border-radius: 20px;
+  white-space: nowrap;
+  margin-right: 0.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
 
+/* Responsive adjustments for welcome message */
+@media (max-width: 900px) {
+  .welcome-message {
+    font-size: 0.7rem;
+    padding: 0.25rem 0.75rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .welcome-message {
+    display: none;
+  }
+}
+
+/* Update header-right to better accommodate welcome message */
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* Make datetime and user-dropdown work well together */
+@media (max-width: 640px) {
+  .header-right {
+    gap: 0.5rem;
+  }
+  
+  .datetime {
+    display: none;
+  }
+}
+
+/* Top bar styling enhancements */
+.top-bar {
+  background: var(--bg-white);
+  border-bottom: 1px solid var(--border-light);
+  padding: 0.6rem 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 99;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+/* User avatar styling */
+.user-avatar-sm {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #27ae60, #1e8e4a);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  color: white;
+  font-size: var(--text-sm);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* User dropdown hover effect */
+.user-dropdown {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  border-radius: 30px;
+  transition: all 0.2s;
+}
+
+.user-dropdown:hover {
+  background: var(--bg-light);
+  transform: translateY(-1px);
+}
+
+/* User info text */
+.user-info .name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.user-info .role {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* DateTime styling */
+.datetime {
+  text-align: right;
+  font-size: var(--text-xs);
+  background: #f8f9fa;
+  padding: 0.25rem 0.75rem;
+  border-radius: 20px;
+}
+
+.datetime .time {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.datetime .date {
+  color: var(--text-muted);
+  font-size: 0.65rem;
+}
 @media (min-height: 620px) {
   .sidebar {
     overflow-y: hidden;

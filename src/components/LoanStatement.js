@@ -1,5 +1,7 @@
-// LoanStatement.js - API first, then client-side fallback
+// LoanStatement.js - With View Statement button and modal that displays PDF with table format
 import React, { useRef, useState, useEffect } from 'react';
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
 
 function LoanStatement() {
   const reportRef = useRef();
@@ -8,12 +10,16 @@ function LoanStatement() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [headerData, setHeaderData] = useState(null);
+  const [showModal, setShowModal] = useState(false);
+  const [selectedLoan, setSelectedLoan] = useState(null);
+  const [pdfUrl, setPdfUrl] = useState(null);
+  const [statementLoading, setStatementLoading] = useState(false);
   
   const brandColor = '#00a3b5';
 
-  // Process loan data from API response
+  // Process loan data from API response - DISPLAY RAW DATA, NO CALCULATIONS
   const processLoanData = (data) => {
-    console.log('Processing loan data:', data);
+    console.log('Raw API response:', JSON.stringify(data, null, 2));
     
     let loans = [];
     if (Array.isArray(data)) {
@@ -25,23 +31,23 @@ function LoanStatement() {
       else if (data.loanNo || data.amount) loans = [data];
     }
     
+    // Display EXACT backend data - NO transformations
     const formattedLoans = loans.map((item, index) => ({
       id: index,
-      loanNo: item.loanNo || item.loan_number || item.loan_id || 'N/A',
-      purpose: item.loanPurpose || item.purpose || item.lpurpose || 'Member Loan',
-      sdate: item.startDate || item.sdate || item.cdate || 'N/A',
-      edate: item.endDate || item.edate || item.maturityDate || 'N/A',
-      period: item.period || item.tenure || '12',
-      originalAmount: parseFloat(item.amount || item.originalAmount || item.principal || 0),
-      balance: parseFloat(item.outStanding || item.balance || item.outstandingBalance || 0),
-      interest: item.interest || item.interestRate || 12,
-      status: (item.outStanding > 0 || item.balance > 0) ? 'Active' : 'Completed'
+      loanNo: item.loanNo,
+      purpose: item.loanPurpose,
+      sdate: item.startDate,
+      edate: item.endDate,
+      period: item.period,
+      originalAmount: item.amount,
+      balance: item.outStanding,
     }));
     
+    console.log('Formatted loans (raw backend data):', formattedLoans);
     setLoanData(formattedLoans);
     
-    const totalLoaned = formattedLoans.reduce((sum, loan) => sum + loan.originalAmount, 0);
-    const totalBalance = formattedLoans.reduce((sum, loan) => Math.max(0, sum + loan.balance), 0);
+    const totalLoaned = formattedLoans.reduce((sum, loan) => sum + (loan.originalAmount || 0), 0);
+    const totalBalance = formattedLoans.reduce((sum, loan) => sum + (loan.balance || 0), 0);
     
     if (formattedLoans.length > 0) {
       localStorage.setItem('loanData', JSON.stringify({ loans: formattedLoans, totals: { totalLoaned, totalBalance } }));
@@ -72,20 +78,104 @@ function LoanStatement() {
     };
   };
 
-  const safeFormatNumber = (value) => {
-    if (value === undefined || value === null || isNaN(value)) return '0.00';
-    // Handle negative balances (show as 0 or absolute value)
-    const numValue = Math.max(0, value);
-    return numValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const handleViewStatement = async (loan) => {
+    setSelectedLoan(loan);
+    setStatementLoading(true);
+    setShowModal(true);
+    
+    // Clear previous PDF URL
+    if (pdfUrl) {
+      URL.revokeObjectURL(pdfUrl);
+      setPdfUrl(null);
+    }
+    
+    try {
+      const token = localStorage.getItem('authToken');
+      const memberNumber = localStorage.getItem('memberNumber');
+      
+      console.log('Generating statement for loan:', loan.loanNo);
+      
+      const response = await fetch('/api/v1/loan-statement-direct', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          loanNo: loan.loanNo,
+          memberNo: memberNumber,
+          startDate: loan.sdate,
+          endDate: loan.edate
+        })
+      });
+      
+      if (response.ok) {
+        // Get the PDF blob
+        const blob = await response.blob();
+        // Create a URL for the blob
+        const url = URL.createObjectURL(blob);
+        setPdfUrl(url);
+      } else {
+        const error = await response.json();
+        setError(error.message || 'Failed to generate statement');
+      }
+    } catch (err) {
+      console.error('Error generating statement:', err);
+      setError('Failed to generate loan statement. Please try again.');
+    } finally {
+      setStatementLoading(false);
+    }
+  };
+
+  const handleCloseModal = () => {
+    setShowModal(false);
+    setSelectedLoan(null);
+    // Clean up PDF URL to prevent memory leaks
+    if (pdfUrl) {
+      URL.revokeObjectURL(pdfUrl);
+      setPdfUrl(null);
+    }
+  };
+
+  const handleMainPDFDownload = async () => {
+    const element = reportRef.current;
+    if (!element) return;
+    
+    try {
+      const canvas = await html2canvas(element, {
+        scale: 2,
+        backgroundColor: '#ffffff',
+        logging: false,
+        useCORS: true
+      });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const imgWidth = 210;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+      pdf.save(`loan-summary-${memberData?.accNo || 'member'}-${new Date().toISOString().split('T')[0]}.pdf`);
+    } catch (err) {
+      console.error('Error generating PDF:', err);
+      alert('Failed to generate PDF. Please try again.');
+    }
+  };
+
+  // Display raw values exactly as from backend
+  const formatRawValue = (value) => {
+    if (value === undefined || value === null) return 'N/A';
+    if (typeof value === 'number') return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return String(value);
   };
 
   const formatDate = (dateString) => {
-    if (!dateString || dateString === 'N/A') return 'N/A';
+    if (!dateString) return 'N/A';
     try {
       const date = new Date(dateString);
       if (isNaN(date.getTime())) return dateString;
       return date.toLocaleDateString('en-GB');
-    } catch { return dateString; }
+    } catch {
+      return dateString;
+    }
   };
 
   // Main data fetch
@@ -149,87 +239,44 @@ function LoanStatement() {
         
         if (instantResponse.ok) {
           const instantData = await instantResponse.json();
-          console.log('Instant loan data:', instantData);
+          console.log('RAW API RESPONSE:', JSON.stringify(instantData, null, 2));
           
-          // Process the data from the API
-          if (instantData && instantData.data && Array.isArray(instantData.data)) {
+          if (Array.isArray(instantData)) {
+            processLoanData(instantData);
+          } else if (instantData && instantData.data && Array.isArray(instantData.data)) {
             processLoanData(instantData.data);
           } else if (instantData && instantData.data) {
             processLoanData([instantData.data]);
-          } else if (Array.isArray(instantData)) {
-            processLoanData(instantData);
           } else {
-            // Fallback to sample data if no loans found
-            const sampleLoans = [
-              { 
-                loanNo: '636/2025', 
-                loanPurpose: 'Metro Sacco Emergency Loan', 
-                startDate: '2025-01-24', 
-                endDate: '2026-01-31', 
-                period: 12, 
-                amount: 50000, 
-                outStanding: -500.08,
-                interest: 8.5
-              }
-            ];
-            processLoanData(sampleLoans);
+            setError('No loan records found');
+            setLoanData([]);
           }
         } else {
           console.error('Failed to fetch instant loans:', instantResponse.status);
-          setError('Unable to fetch loan data. Showing sample data.');
-          // Use sample loan data
-          const sampleLoans = [
-            { 
-              loanNo: '636/2025', 
-              loanPurpose: 'Metro Sacco Emergency Loan', 
-              startDate: '2025-01-24', 
-              endDate: '2026-01-31', 
-              period: 12, 
-              amount: 50000, 
-              outStanding: -500.08,
-              interest: 8.5
-            }
-          ];
-          processLoanData(sampleLoans);
+          setError('Unable to fetch loan data.');
+          setLoanData([]);
         }
         
       } catch (err) {
         console.error('Error fetching data:', err);
-        setError('Network error. Using demo data.');
-        // Fallback to sample data
-        const sampleLoans = [
-          { 
-            loanNo: '636/2025', 
-            loanPurpose: 'Metro Sacco Emergency Loan', 
-            startDate: '2025-01-24', 
-            endDate: '2026-01-31', 
-            period: 12, 
-            amount: 50000, 
-            outStanding: -500.08,
-            interest: 8.5
-          },
-          { 
-            loanNo: '1353/2026', 
-            loanPurpose: 'Metro Sacco Instant Loan', 
-            startDate: '2026-03-24', 
-            endDate: '2026-09-26', 
-            period: 6, 
-            amount: 50000, 
-            outStanding: 25000,
-            interest: 9.0
-          }
-        ];
-        processLoanData(sampleLoans);
+        setError('Network error. Unable to fetch loan data.');
       } finally {
         setLoading(false);
       }
     };
     
     fetchData();
+    
+    // Cleanup function to revoke PDF URLs when component unmounts
+    return () => {
+      if (pdfUrl) {
+        URL.revokeObjectURL(pdfUrl);
+      }
+    };
   }, []);
 
   const totalLoanAmount = loanData.reduce((sum, loan) => sum + (loan.originalAmount || 0), 0);
-  const totalOutstanding = loanData.reduce((sum, loan) => sum + Math.max(0, loan.balance || 0), 0);
+  const totalOutstanding = loanData.reduce((sum, loan) => sum + (loan.balance || 0), 0);
 
   if (loading) {
     return (
@@ -264,14 +311,23 @@ function LoanStatement() {
         <div className="member-section">
           <table className="info-table">
             <tbody>
-              <tr><td className="info-label">Name:</td><td className="info-value"><strong>{memberData?.holdersName || memberData?.name || 'N/A'}</strong> {memberData?.accNo ? `(${memberData.accNo})` : ''}</td>
-              <td className="info-label">Member No:</td><td className="info-value"><strong>{memberData?.accNo || memberData?.memberNo || 'N/A'}</strong></td>
+              <tr>
+                <td className="info-label">Name:</td>
+                <td className="info-value"><strong>{memberData?.holdersName || memberData?.name || 'N/A'}</strong> {memberData?.accNo ? `(${memberData.accNo})` : ''}</td>
+                <td className="info-label">Member No:</td>
+                <td className="info-value"><strong>{memberData?.accNo || memberData?.memberNo || 'N/A'}</strong></td>
               </tr>
-              <tr><td className="info-label">Email:</td><td className="info-value">{memberData?.emailAdd || memberData?.email || 'N/A'}</td>
-              <td className="info-label">Tel:</td><td className="info-value">{memberData?.tel1 || memberData?.phone || 'N/A'}</td>
+              <tr>
+                <td className="info-label">Email:</td>
+                <td className="info-value">{memberData?.emailAdd || memberData?.email || 'N/A'}</td>
+                <td className="info-label">Tel:</td>
+                <td className="info-value">{memberData?.tel1 || memberData?.phone || 'N/A'}</td>
               </tr>
-              <tr><td className="info-label">ID No:</td><td className="info-value"><strong>{memberData?.idNo || memberData?.idNumber || 'N/A'}</strong></td>
-              <td className="info-label">Print Date:</td><td className="info-value"><strong>{new Date().toLocaleDateString('en-GB')}</strong></td>
+              <tr>
+                <td className="info-label">ID No:</td>
+                <td className="info-value"><strong>{memberData?.idNo || memberData?.idNumber || 'N/A'}</strong></td>
+                <td className="info-label">Print Date:</td>
+                <td className="info-value"><strong>{new Date().toLocaleDateString('en-GB')}</strong></td>
               </tr>
             </tbody>
           </table>
@@ -288,38 +344,40 @@ function LoanStatement() {
                 <th>Period</th>
                 <th>Principal (KES)</th>
                 <th>Balance (KES)</th>
-                <th>Interest (%)</th>
-                <th>Status</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody>
               {loanData.length > 0 ? loanData.map((loan, idx) => (
                 <tr key={loan.id || idx}>
-                  <td><strong>{loan.loanNo}</strong></td>
-                  <td><strong>{loan.purpose}</strong></td>
-                  <td>{formatDate(loan.sdate)}</td>
-                  <td>{formatDate(loan.edate)}</td>
-                  <td className="amount">{loan.period} {loan.period !== 'N/A' ? 'months' : ''}</td>
-                  <td className="amount"><strong>{safeFormatNumber(loan.originalAmount)}</strong></td>
-                  <td className="amount"><strong>{safeFormatNumber(loan.balance)}</strong></td>
-                  <td className="amount">{loan.interest}%</td>
-                  <td className="status">
-                    <span className={`status-badge ${loan.balance > 0 ? 'active' : 'completed'}`}>
-                      {loan.balance > 0 ? 'Active' : 'Completed'}
-                    </span>
+                  <td><strong>{loan.loanNo || 'N/A'}</strong></td>
+                  <td><strong>{loan.purpose || 'N/A'}</strong></td>
+                  <td>{loan.sdate || 'N/A'}</td>
+                  <td>{loan.edate || 'N/A'}</td>
+                  <td className="amount">{loan.period !== undefined ? loan.period : 'N/A'}</td>
+                  <td className="amount"><strong>{formatRawValue(loan.originalAmount)}</strong></td>
+                  <td className="amount"><strong>{formatRawValue(loan.balance)}</strong></td>
+                  <td className="action-cell">
+                    <button 
+                      className="view-stmt-btn"
+                      onClick={() => handleViewStatement(loan)}
+                      style={{ backgroundColor: brandColor }}
+                    >
+                      View Statement
+                    </button>
                   </td>
                 </tr>
               )) : (
-                <tr><td colSpan="9" style={{ textAlign: 'center', padding: '2rem' }}>No loan records found</td></tr>
+                <tr><td colSpan="8" style={{ textAlign: 'center', padding: '2rem' }}>No loan records found</td></tr>
               )}
             </tbody>
             {loanData.length > 0 && (
               <tfoot>
                 <tr className="total-row">
                   <td colSpan="5"><strong>TOTAL</strong></td>
-                  <td className="amount"><strong>{safeFormatNumber(totalLoanAmount)}</strong></td>
-                  <td className="amount"><strong>{safeFormatNumber(totalOutstanding)}</strong></td>
-                  <td colSpan="2"></td>
+                  <td className="amount"><strong>{formatRawValue(totalLoanAmount)}</strong></td>
+                  <td className="amount"><strong>{formatRawValue(totalOutstanding)}</strong></td>
+                  <td></td>
                 </tr>
               </tfoot>
             )}
@@ -332,25 +390,232 @@ function LoanStatement() {
         </div>
       </div>
 
+      <div className="download-section">
+        <button onClick={handleMainPDFDownload} className="download-btn" disabled={loanData.length === 0}>
+          📄 Download PDF Summary
+        </button>
+      </div>
+
       {error && <div className="error-message">{error}</div>}
 
+      {/* Modal for displaying PDF statement */}
+      {showModal && (
+        <div className="modal-overlay" onClick={handleCloseModal}>
+          <div className="modal-container">
+            <div className="modal-header">
+              <h2>Loan Statement - {selectedLoan?.loanNo}</h2>
+              <button className="modal-close" onClick={handleCloseModal}>×</button>
+            </div>
+            <div className="modal-body">
+              {statementLoading ? (
+                <div className="modal-loading">
+                  <div className="loading-spinner-small"></div>
+                  <p>Generating statement...</p>
+                </div>
+              ) : pdfUrl ? (
+                <iframe
+                  src={`${pdfUrl}#toolbar=1&navpanes=1&scrollbar=1&view=FitH`}
+                  title={`Loan Statement ${selectedLoan?.loanNo}`}
+                  className="pdf-viewer"
+                  frameBorder="0"
+                />
+              ) : (
+                <div className="error-container">
+                  <p>Failed to load statement. Please try again.</p>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              {pdfUrl && (
+                <a
+                  href={pdfUrl}
+                  download={`loan-statement-${selectedLoan?.loanNo}.pdf`}
+                  className="download-stmt-btn"
+                >
+                  📄 Download PDF
+                </a>
+              )}
+              <button className="close-modal-btn" onClick={handleCloseModal}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <style>{`
-        .report-container { background: white; padding: 2rem; border-radius: 8px; max-width: 1400px; margin: 0 auto; font-family: monospace; }
-        .report-header { text-align: center; margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 2px solid #000; }
+        .report-container {
+          background: white;
+          padding: 2rem;
+          border-radius: 8px;
+          max-width: 1400px;
+          margin: 0 auto;
+          font-family: monospace;
+        }
+        .report-header {
+          text-align: center;
+          margin-bottom: 2rem;
+          padding-bottom: 1rem;
+          border-bottom: 2px solid #000;
+        }
         .report-header h1 { font-size: 1.25rem; margin: 0; }
         .contact-info { font-size: 0.7rem; margin-top: 0.5rem; }
-        .info-table, .report-table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; font-size: 0.75rem; }
-        .info-table td, .report-table td, .report-table th { border: 1px solid #000; padding: 0.5rem; }
-        .report-table th { background: #f0f0f0; font-weight: bold; text-align: center; }
-        .amount { text-align: right; }
-        .status { text-align: center; }
-        .status-badge { display: inline-block; padding: 0.2rem 0.5rem; border-radius: 4px; font-weight: bold; }
-        .status-badge.active { background: #e3f2fd; color: #1976d2; }
-        .status-badge.completed { background: #e8f5e9; color: #388e3c; }
-        .total-row { background: #f0f0f0; font-weight: bold; }
-        .report-footer { margin-top: 1rem; text-align: center; font-size: 0.7rem; }
-        .error-message { margin-top: 1rem; padding: 0.75rem; background: #fed7d7; border-left: 4px solid #e53e3e; color: #742a2a; }
-        @media print { body { margin: 0; padding: 0; } }
+        .info-table, .report-table {
+          width: 100%;
+          border-collapse: collapse;
+          margin-bottom: 1rem;
+        }
+        .info-table td, .report-table td, .report-table th {
+          border: 1px solid #000;
+          padding: 0.5rem;
+        }
+        .report-table th {
+          background: #f0f0f0;
+          font-weight: bold;
+        }
+        .amount {
+          text-align: right;
+        }
+        .view-stmt-btn {
+          background: ${brandColor};
+          color: white;
+          border: none;
+          padding: 0.3rem 0.8rem;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 0.7rem;
+        }
+        .total-row {
+          background: #f0f0f0;
+          font-weight: bold;
+        }
+        .report-footer {
+          margin-top: 1rem;
+          text-align: center;
+          font-size: 0.7rem;
+        }
+        .download-section {
+          text-align: center;
+          margin-top: 1rem;
+        }
+        .download-btn {
+          background: ${brandColor};
+          color: white;
+          border: none;
+          padding: 0.5rem 1.5rem;
+          border-radius: 4px;
+          cursor: pointer;
+        }
+        .modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: rgba(0,0,0,0.7);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 1000;
+        }
+        .modal-container {
+          background: white;
+          border-radius: 8px;
+          width: 90%;
+          max-width: 1200px;
+          height: 90vh;
+          display: flex;
+          flex-direction: column;
+        }
+        .modal-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 1rem;
+          border-bottom: 2px solid ${brandColor};
+        }
+        .modal-close {
+          background: none;
+          border: none;
+          font-size: 1.5rem;
+          cursor: pointer;
+          font-weight: bold;
+        }
+        .modal-close:hover {
+          color: ${brandColor};
+        }
+        .modal-body {
+          flex: 1;
+          overflow: auto;
+          padding: 0;
+          min-height: 0;
+        }
+        .modal-footer {
+          display: flex;
+          justify-content: flex-end;
+          gap: 1rem;
+          padding: 1rem;
+          border-top: 1px solid #ddd;
+        }
+        .download-stmt-btn, .close-modal-btn {
+          padding: 0.5rem 1rem;
+          border: none;
+          border-radius: 4px;
+          cursor: pointer;
+          text-decoration: none;
+          display: inline-block;
+          font-size: 0.9rem;
+        }
+        .download-stmt-btn {
+          background: ${brandColor};
+          color: white;
+        }
+        .close-modal-btn {
+          background: #666;
+          color: white;
+        }
+        .pdf-viewer {
+          width: 100%;
+          height: 100%;
+          border: none;
+        }
+        .modal-loading {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          height: 100%;
+          gap: 1rem;
+        }
+        .loading-spinner-small {
+          width: 40px;
+          height: 40px;
+          border: 3px solid #e2e8f0;
+          border-top-color: ${brandColor};
+          border-radius: 50%;
+          animation: spin 1s linear infinite;
+        }
+        .error-container {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 100%;
+          color: #e53e3e;
+        }
+        .error-message {
+          margin-top: 1rem;
+          padding: 0.75rem;
+          background: #fed7d7;
+          border-left: 4px solid #e53e3e;
+          color: #742a2a;
+        }
+        .action-cell {
+          text-align: center;
+        }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+        @media print {
+          .download-section, .modal-overlay { display: none; }
+        }
       `}</style>
     </>
   );
