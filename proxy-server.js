@@ -1,4 +1,3 @@
-// proxy-server.js - With NEW JSON endpoint for table display
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -8,12 +7,31 @@ const PDFDocument = require('pdfkit');
 const app = express();
 const port = 3023;
 
-app.use(cors());
+// CORS configuration
+app.use(cors({
+  origin: 'http://localhost:3000',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Cookie', 'X-Requested-With']
+}));
+
 app.use(express.json());
 
-// Log all requests
+// Disable caching
+app.use('/api/v1', (req, res, next) => {
+  res.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.header('Pragma', 'no-cache');
+  res.header('Expires', '0');
+  next();
+});
+app.disable('etag');
+
+// Logging middleware
 app.use((req, res, next) => {
-  console.log(`📡 ${req.method} ${req.url}`);
+  console.log(`\n📡 ${req.method} ${req.url}`);
+  if (req.body && Object.keys(req.body).length > 0) {
+    console.log(`   Body:`, req.body);
+  }
   next();
 });
 
@@ -28,248 +46,339 @@ const dbPool = new Pool({
   connectionTimeoutMillis: 10000,
 });
 
-// Test database connection
-dbPool.connect((err, client, release) => {
+dbPool.connect((err) => {
   if (err) {
     console.error('❌ Database connection failed:', err.message);
   } else {
     console.log('✅ Database connected successfully');
-    release();
+  }
+});
+
+const LIVE_API_BASE = 'https://memberportal.metro-sacco.com/api/v1';
+
+// ============================================
+// MIDDLEWARE: Check if request should be handled locally or forwarded
+// ============================================
+const LOCAL_ENDPOINTS = [
+  '/auth/change-password',
+  '/loan-statement-direct', 
+  '/withdrawable-statement-direct',
+  '/loan/apply',
+  '/instant/'  // Handle instant loans locally (includes memberNo parameter)
+];
+
+app.use('/api/v1', async (req, res, next) => {
+  // Check if this is a local endpoint
+  const isLocalEndpoint = LOCAL_ENDPOINTS.some(endpoint => {
+    if (endpoint === '/instant/') {
+      return req.path.startsWith('/instant/');
+    }
+    return req.path === endpoint;
+  });
+  
+  if (isLocalEndpoint) {
+    return next(); // Handle locally
+  }
+  
+  // Forward to live server
+  try {
+    const liveUrl = `${LIVE_API_BASE}${req.path}`;
+    console.log(`   🔄 FORWARDING to: ${liveUrl}`);
+    
+    const response = await axios({
+      method: req.method,
+      url: liveUrl,
+      data: req.body,
+      params: req.query,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...(req.headers.authorization && { 'Authorization': req.headers.authorization })
+      },
+      timeout: 30000
+    });
+    
+    console.log(`   ✅ Response: ${response.status}`);
+    res.status(response.status).json(response.data);
+  } catch (error) {
+    console.error(`   ❌ Forwarding error:`, error.message);
+    if (error.response) {
+      console.log(`   📝 Live server responded with: ${error.response.status}`);
+      res.status(error.response.status).json(error.response.data);
+    } else {
+      res.status(500).json({ error: 'Failed to connect to live server', message: error.message });
+    }
   }
 });
 
 // ============================================
-// NEW API: LOAN STATEMENT JSON FOR TABLE DISPLAY
-// Based on the Java StatementAccPdf logic
+// LOCAL ENDPOINT: GET INSTANT LOANS (FROM LOCAL DATABASE)
 // ============================================
-app.post('/api/v1/loan-statement-table', async (req, res) => {
-  const { loanNo, memberNo, startDate, endDate } = req.body;
-  
-  console.log(`\n📊 NEW API - Generating JSON for Loan: ${loanNo}, Member: ${memberNo}`);
-  console.log(`   Period: ${startDate} to ${endDate}`);
+app.get('/api/v1/instant/:memberNo', async (req, res) => {
+  const { memberNo } = req.params;
+  console.log(`\n⚡ [LOCAL] Fetching instant loans for: ${memberNo}`);
   
   try {
-    // 1. Fetch header/organization info (like Java's pb_header)
-    const headerResult = await dbPool.query(
-      "SELECT header_name FROM pb_header LIMIT 1"
+    // First, check what columns exist in pb_saccoloan
+    const columnsCheck = await dbPool.query(
+      `SELECT column_name 
+       FROM information_schema.columns 
+       WHERE table_name = 'pb_saccoloan' 
+       AND column_name IN ('status', 'loan_status')
+       ORDER BY column_name`
     );
+    
+    const availableColumns = columnsCheck.rows.map(row => row.column_name);
+    console.log(`   📋 Available columns:`, availableColumns);
+    
+    // Build query without status column if it doesn't exist
+    let query = `
+      SELECT 
+        loan_no as "loanNo",
+        lpurpose as "loanPurpose", 
+        cdate as "startDate",
+        edate as "endDate",
+        period,
+        amount,
+        amount as "outStanding"
+    `;
+    
+    // Add status column only if it exists
+    if (availableColumns.includes('status')) {
+      query += `, status`;
+    } else if (availableColumns.includes('loan_status')) {
+      query += `, loan_status as "status"`;
+    }
+    
+    query += ` FROM pb_saccoloan WHERE mem_no = $1 ORDER BY cdate DESC`;
+    
+    const loans = await dbPool.query(query, [memberNo]);
+    
+    console.log(`   ✅ Found ${loans.rows.length} loan(s) for member ${memberNo}`);
+    
+    res.status(200).json({
+      success: true,
+      data: loans.rows,
+      source: "local",
+      count: loans.rows.length
+    });
+  } catch (dbError) {
+    console.error(`   ❌ Database error:`, dbError.message);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to fetch instant loans",
+      error: dbError.message 
+    });
+  }
+});
+
+// ============================================
+// LOCAL ENDPOINT: SUBMIT LOAN APPLICATION
+// ============================================
+app.post('/api/v1/loan/apply', async (req, res) => {
+  console.log('\n📝 New Loan Application Received:');
+  console.log(JSON.stringify(req.body, null, 2));
+  
+  const {
+    memberNo,
+    memberName,
+    loanType,
+    loanAmount,
+    periodMonths,
+    interestRate,
+    monthlyDeduction,
+    totalAmount,
+    applicationDate
+  } = req.body;
+  
+  try {
+    // Check if member exists
+    const memberCheck = await dbPool.query(
+      `SELECT acc_no, holders_name, id_no, email_add, postal_code, tel1 
+       FROM pb_share_register WHERE acc_no = $1`,
+      [memberNo]
+    );
+    
+    if (memberCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Member not found' });
+    }
+    
+    const member = memberCheck.rows[0];
+    console.log(`   ✅ Member found: ${member.holders_name}`);
+    
+    // Generate loan number
+    const year = new Date().getFullYear();
+    const loanNoResult = await dbPool.query(
+      `SELECT COALESCE(MAX(CAST(SPLIT_PART(loan_no, '/', 1) AS INTEGER)), 0) + 1 as loan_seq 
+       FROM pb_saccoloan WHERE loan_no LIKE '%/${year}'`
+    );
+    const loanSeq = loanNoResult.rows[0].loan_seq;
+    const loanNumber = `${loanSeq}/${year}`;
+    
+    console.log(`   🎫 Generated Loan Number: ${loanNumber}`);
+    
+    // Calculate dates
+    const startDate = new Date(applicationDate || new Date());
+    const endDate = new Date(startDate);
+    endDate.setMonth(endDate.getMonth() + parseInt(periodMonths));
+    
+    const formattedStartDate = startDate.toISOString().split('T')[0];
+    const formattedEndDate = endDate.toISOString().split('T')[0];
+    
+    // First, check the actual columns in the table
+    const columnsCheck = await dbPool.query(
+      `SELECT column_name 
+       FROM information_schema.columns 
+       WHERE table_name = 'pb_saccoloan'`
+    );
+    
+    const existingColumns = columnsCheck.rows.map(row => row.column_name);
+    console.log(`   📋 Existing columns:`, existingColumns);
+    
+    // Build insert query based on existing columns
+    const insertFields = [
+      'mem_no', 'member_name', 'loan_no', 'pno', 'wstation', 'employer', 
+      'poastal_code', 'categ', 'email_address', 'security1', 'id_no', 
+      'lpurpose', 'pymt_terms', 'cdate', 'edate', 'amount', 'period', 
+      'repayment', 'interest', 'premium', 'user_name', 'input_date', 'total'
+    ];
+    
+    const insertValues = [
+      memberNo, memberName, loanNumber, '', 'METROPOLITAN', 'Metropolitan',
+      member.postal_code || '', 'METROPOLITAN STAFF', member.email_add || '', 
+      'Shares', member.id_no || '', loanType, 'Monthly', formattedStartDate,
+      formattedEndDate, parseFloat(loanAmount), parseInt(periodMonths),
+      parseFloat(monthlyDeduction), parseFloat(interestRate), 
+      parseFloat(totalAmount), 'web_user', new Date(), parseFloat(totalAmount)
+    ];
+    
+    // Add status column only if it exists
+    if (existingColumns.includes('status')) {
+      insertFields.push('status');
+      insertValues.push('Pending');
+    }
+    
+    const placeholders = insertValues.map((_, i) => `$${i + 1}`).join(', ');
+    const insertQuery = `INSERT INTO pb_saccoloan (${insertFields.join(', ')}) VALUES (${placeholders})`;
+    
+    await dbPool.query(insertQuery, insertValues);
+    
+    console.log(`   ✅ Loan application submitted successfully!`);
+    console.log(`   📊 Loan Number: ${loanNumber}`);
+    
+    res.status(200).json({
+      success: true,
+      message: 'Loan application submitted successfully',
+      loanNumber: loanNumber,
+      data: {
+        memberNo,
+        loanNumber,
+        amount: loanAmount,
+        period: periodMonths,
+        monthlyDeduction,
+        totalAmount
+      }
+    });
+    
+  } catch (error) {
+    console.error(`   ❌ Error:`, error.message);
+    console.error(`   Stack:`, error.stack);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to submit loan application: ' + error.message
+    });
+  }
+});
+
+// ============================================
+// LOCAL ENDPOINT: CHANGE PASSWORD
+// ============================================
+app.post('/api/v1/auth/change-password', async (req, res) => {
+  const { memberNo, otp, newPassword, confirmPassword } = req.body;
+  
+  console.log(`\n🔐 [LOCAL] Password change request for: ${memberNo}`);
+  
+  if (newPassword !== confirmPassword) {
+    return res.status(400).json({ success: false, message: 'Passwords do not match' });
+  }
+  
+  if (!otp || otp.length !== 4) {
+    return res.status(400).json({ success: false, message: 'Please enter a valid 4-digit OTP' });
+  }
+  
+  try {
+    const memberCheck = await dbPool.query(`SELECT acc_no FROM pb_share_register WHERE acc_no = $1`, [memberNo]);
+    if (memberCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Member not found.' });
+    }
+    
+    await dbPool.query(`UPDATE pb_share_register SET pass = $1 WHERE acc_no = $2`, [newPassword, memberNo]);
+    
+    console.log(`   ✅ Password updated successfully!`);
+    return res.status(200).json({
+      success: true,
+      message: `Password changed successfully! You can now login with your new password`
+    });
+  } catch (dbError) {
+    console.error(`   ❌ Database error:`, dbError.message);
+    return res.status(500).json({ success: false, message: 'Failed to change password.' });
+  }
+});
+
+// ============================================
+// LOCAL ENDPOINT: LOAN STATEMENT PDF
+// ============================================
+app.post('/api/v1/loan-statement-direct', async (req, res) => {
+  const { loanNo, memberNo, startDate, endDate } = req.body;
+  console.log(`\n📄 [LOCAL] Generating PDF for Loan: ${loanNo}`);
+  
+  try {
+    const headerResult = await dbPool.query("SELECT header_name FROM pb_header LIMIT 1");
     const organisationName = headerResult.rows[0]?.header_name || 'METROPOLITAN HOSPITAL SACCO LTD';
     
-    // 2. Fetch loan details (like Java's pb_saccoloan query)
     const loanResult = await dbPool.query(
-      `SELECT 
-        lpurpose as purpose, 
-        pymt_terms as terms,
-        amount, 
-        cdate as start_date, 
-        edate as end_date, 
-        period, 
-        repayment,
-        interest,
-        premium
-       FROM pb_saccoloan 
-       WHERE loan_no = $1`,
+      `SELECT lpurpose as purpose, amount, cdate as start_date, edate as end_date, period, interest
+       FROM pb_saccoloan WHERE loan_no = $1`,
       [loanNo]
     );
     
     if (loanResult.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Loan not found' });
+      return res.status(404).json({ error: 'Loan not found' });
     }
     const loan = loanResult.rows[0];
     
-    // 3. Fetch member details (like Java's pb_share_register query)
     const memberResult = await dbPool.query(
-      `SELECT 
-        acc_no,
-        holders_name, 
-        postal_code || ' ' || postal_address as address,
-        tel1, 
-        email_add, 
-        id_no
-       FROM pb_share_register 
-       WHERE acc_no = $1`,
+      `SELECT holders_name, id_no, tel1, email_add, acc_no 
+       FROM pb_share_register WHERE acc_no = $1`,
       [memberNo]
     );
     
     if (memberResult.rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Member not found' });
+      return res.status(404).json({ error: 'Member not found' });
     }
     const member = memberResult.rows[0];
     
-    // 4. Get opening balance (transactions before start date) - like Java's rsetTotals2
     const openingResult = await dbPool.query(
       `SELECT COALESCE(SUM(balance - credit_bal), 0) as opening_balance
        FROM ac_debtors 
-       WHERE account_no = $1 
-         AND invoice_no = $2 
-         AND date::date < $3::date`,
+       WHERE account_no = $1 AND invoice_no = $2 AND date::date < $3::date`,
       [memberNo, loanNo, startDate]
     );
     const openingBalance = parseFloat(openingResult.rows[0]?.opening_balance || 0);
     
-    // 5. Fetch transactions (like Java's rset1 query)
     const transResult = await dbPool.query(
-      `SELECT 
-        TO_CHAR(DATE, 'DD/MM/YYYY') as trans_date,
-        DATE as full_date,
-        receipt_no,
-        cheque_no,
-        initcap(item) as item,
-        initcap(reason) as reason,
-        reference_no,
-        COALESCE(balance, 0) as debit,
-        COALESCE(credit_bal, 0) as credit,
-        dispatch_no
+      `SELECT TO_CHAR(date, 'DD/MM/YYYY') as trans_date,
+              initcap(item) as item, reference_no, receipt_no,
+              COALESCE(balance, 0) as debit, COALESCE(credit_bal, 0) as credit
        FROM ac_debtors 
-       WHERE account_no = $1 
-         AND invoice_no = $2
+       WHERE account_no = $1 AND invoice_no = $2
          AND date::date BETWEEN $3::date AND $4::date
          AND (balance <> 0 OR credit_bal <> 0)
        ORDER BY date ASC`,
       [memberNo, loanNo, startDate, endDate]
     );
     
-    console.log(`   Found ${transResult.rows.length} transactions`);
-    
-    // 6. Build transaction list with running balance (like Java's while(rset1.next()) loop)
-    let runningBalance = openingBalance;
-    let totalDebit = 0;
-    let totalCredit = 0;
-    const transactions = [];
-    
-    // Add opening balance as first entry (like Java's "BAL/BF" row)
-    transactions.push({
-      date: '-',
-      description: 'OPENING BALANCE',
-      receiptNo: '-',
-      referenceNo: '-',
-      debit: 0,
-      credit: 0,
-      balance: openingBalance,
-      isOpening: true
-    });
-    
-    for (const row of transResult.rows) {
-      const debit = parseFloat(row.debit) || 0;
-      const credit = parseFloat(row.credit) || 0;
-      runningBalance = runningBalance + debit - credit;
-      totalDebit += debit;
-      totalCredit += credit;
-      
-      // Combine receipt_no and cheque_no like Java does: "receipt_no||' '||cheque_no"
-      const docNo = [row.receipt_no, row.cheque_no].filter(Boolean).join(' ') || '-';
-      
-      transactions.push({
-        date: row.trans_date,
-        description: row.item || row.reason || 'Transaction',
-        receiptNo: row.receipt_no || '',
-        chequeNo: row.cheque_no || '',
-        docNo: docNo,
-        referenceNo: row.reference_no || '',
-        debit: debit,
-        credit: credit,
-        balance: runningBalance,
-        dispatchNo: row.dispatch_no || '',
-        isOpening: false
-      });
-    }
-    
-    // 7. Build response object matching Java report structure
-    const responseData = {
-      success: true,
-      generatedAt: new Date().toISOString(),
-      organisation: {
-        name: organisationName,
-        // These would come from pb_hospitalprofile in Java
-        postalCode: '00100',
-        boxNo: 'P.O. Box 12345',
-        town: 'Nairobi',
-        telNo: '020-1234567',
-        email: 'info@metro-sacco.com'
-      },
-      member: {
-        accNo: member.acc_no,
-        name: member.holders_name || 'N/A',
-        address: member.address || 'N/A',
-        phone: member.tel1 || 'N/A',
-        email: member.email_add || 'N/A',
-        idNo: member.id_no || 'N/A'
-      },
-      loan: {
-        loanNo: loanNo,
-        type: loan.purpose || 'N/A',
-        terms: loan.terms || 'N/A',
-        amount: parseFloat(loan.amount || 0),
-        startDate: loan.start_date,
-        endDate: loan.end_date,
-        period: parseFloat(loan.period || 0),
-        repayment: parseFloat(loan.repayment || 0),
-        interestRate: parseFloat(loan.interest || 0),
-        premium: parseFloat(loan.premium || 0)
-      },
-      statement: {
-        period: {
-          from: startDate,
-          to: endDate
-        },
-        openingBalance: openingBalance,
-        closingBalance: runningBalance,
-        transactions: transactions,
-        summary: {
-          totalDebit: totalDebit,
-          totalCredit: totalCredit,
-          transactionCount: transResult.rows.length,
-          netChange: totalDebit - totalCredit
-        }
-      }
-    };
-    
-    console.log(`   ✅ JSON response ready - Closing balance: ${runningBalance}`);
-    res.json(responseData);
-    
-  } catch (error) {
-    console.error('   ❌ Error:', error.message);
-    console.error('   Stack:', error.stack);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message,
-      details: error.stack
-    });
-  }
-});
-
-// ============================================
-// ORIGINAL PDF ENDPOINT (kept for download functionality)
-// ============================================
-app.post('/api/v1/loan-statement-direct', async (req, res) => {
-  const { loanNo, memberNo, startDate, endDate } = req.body;
-  
-  console.log(`\n📄 Generating PDF for Loan: ${loanNo}, Member: ${memberNo}`);
-  
-  try {
-    const loanResult = await dbPool.query(
-      'SELECT lpurpose as purpose, amount, cdate as start_date, edate as end_date, period, interest FROM pb_saccoloan WHERE loan_no = $1',
-      [loanNo]
-    );
-    
-    const memberResult = await dbPool.query(
-      'SELECT holders_name, id_no, tel1, email_add FROM pb_share_register WHERE acc_no = $1',
-      [memberNo]
-    );
-    
-    const transResult = await dbPool.query(
-      `SELECT TO_CHAR(DATE, 'DD/MM/YYYY') as trans_date, 
-              initcap(item) as item, reference_no, 
-              COALESCE(balance, 0) as debit, 
-              COALESCE(credit_bal, 0) as credit
-       FROM ac_debtors 
-       WHERE account_no = $1 AND invoice_no = $2
-       AND date::date BETWEEN $3::date AND $4::date
-       ORDER BY date`,
-      [memberNo, loanNo, startDate, endDate]
-    );
-    
-    const doc = new PDFDocument({ margin: 50 });
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
     const chunks = [];
     
     doc.on('data', chunk => chunks.push(chunk));
@@ -280,52 +389,101 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
       res.send(pdfBuffer);
     });
     
-    doc.fontSize(18).font('Helvetica-Bold').text('LOAN STATEMENT', { align: 'center' });
+    doc.fontSize(16).font('Helvetica-Bold').text(organisationName, { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(14).font('Helvetica-Bold').text('LOAN STATEMENT', { align: 'center' });
     doc.moveDown();
     
-    if (memberResult.rows[0]) {
-      const m = memberResult.rows[0];
-      doc.fontSize(10);
-      doc.font('Helvetica-Bold').text('MEMBER INFORMATION');
-      doc.font('Helvetica');
-      doc.text(`Name: ${m.holders_name || 'N/A'}`);
-      doc.text(`Member No: ${memberNo}`);
-      doc.text(`ID No: ${m.id_no || 'N/A'}`);
-      doc.text(`Phone: ${m.tel1 || 'N/A'}`);
-      doc.text(`Email: ${m.email_add || 'N/A'}`);
-      doc.moveDown();
-    }
+    doc.fontSize(10).font('Helvetica-Bold').text('MEMBER INFORMATION');
+    doc.font('Helvetica');
+    doc.text(`Name: ${member.holders_name || 'N/A'}`);
+    doc.text(`Member No: ${member.acc_no || memberNo}`);
+    doc.text(`ID No: ${member.id_no || 'N/A'}`);
+    doc.text(`Phone: ${member.tel1 || 'N/A'}`);
+    doc.text(`Email: ${member.email_add || 'N/A'}`);
+    doc.moveDown();
     
-    if (loanResult.rows[0]) {
-      const l = loanResult.rows[0];
-      doc.font('Helvetica-Bold').text('LOAN INFORMATION');
-      doc.font('Helvetica');
-      doc.text(`Loan Number: ${loanNo}`);
-      doc.text(`Purpose: ${l.purpose || 'N/A'}`);
-      doc.text(`Amount: KES ${parseFloat(l.amount || 0).toLocaleString()}`);
-      doc.text(`Interest Rate: ${l.interest || 0}%`);
-      doc.text(`Period: ${l.period || 0} months`);
-      doc.text(`Start Date: ${l.start_date || 'N/A'}`);
-      doc.text(`End Date: ${l.end_date || 'N/A'}`);
-      doc.moveDown();
-    }
+    doc.font('Helvetica-Bold').text('LOAN INFORMATION');
+    doc.font('Helvetica');
+    doc.text(`Loan Number: ${loanNo}`);
+    doc.text(`Purpose: ${loan.purpose || 'N/A'}`);
+    doc.text(`Amount: KES ${parseFloat(loan.amount || 0).toLocaleString()}`);
+    doc.text(`Interest Rate: ${loan.interest || 0}%`);
+    doc.text(`Period: ${loan.period || 0} months`);
+    doc.text(`Start Date: ${loan.start_date ? new Date(loan.start_date).toLocaleDateString('en-GB') : 'N/A'}`);
+    doc.text(`End Date: ${loan.end_date ? new Date(loan.end_date).toLocaleDateString('en-GB') : 'N/A'}`);
+    doc.moveDown();
     
     doc.font('Helvetica-Bold').text('TRANSACTION HISTORY', { underline: true });
     doc.moveDown(0.5);
     
-    let runningBalance = 0;
+    let runningBalance = openingBalance;
+    let totalDebit = 0, totalCredit = 0;
+    let y = doc.y + 10;
+    
+    doc.font('Helvetica-Bold').fontSize(8);
+    doc.text('Date', 50, y);
+    doc.text('Description', 100, y);
+    doc.text('Ref No', 250, y);
+    doc.text('Receipt No', 320, y);
+    doc.text('Debit (KES)', 400, y, { align: 'right' });
+    doc.text('Credit (KES)', 470, y, { align: 'right' });
+    doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
+    y += 18;
     doc.font('Helvetica').fontSize(8);
     
-    transResult.rows.forEach((row, idx) => {
+    doc.text('-', 50, y);
+    doc.text('OPENING BALANCE', 100, y);
+    doc.text('-', 250, y);
+    doc.text('-', 320, y);
+    doc.text(openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+    doc.text('-', 470, y, { align: 'right' });
+    y += 15;
+    
+    for (const row of transResult.rows) {
       const debit = parseFloat(row.debit) || 0;
       const credit = parseFloat(row.credit) || 0;
       runningBalance = runningBalance + debit - credit;
-      doc.text(`${row.trans_date} | ${row.item || 'Transaction'} | Debit: ${debit.toLocaleString()} | Credit: ${credit.toLocaleString()} | Balance: ${runningBalance.toLocaleString()}`);
-      if (idx < transResult.rows.length - 1) doc.moveDown(0.3);
-    });
+      totalDebit += debit;
+      totalCredit += credit;
+      
+      if (y > 700) {
+        doc.addPage();
+        y = 50;
+        doc.font('Helvetica-Bold').fontSize(8);
+        doc.text('Date', 50, y);
+        doc.text('Description', 100, y);
+        doc.text('Ref No', 250, y);
+        doc.text('Receipt No', 320, y);
+        doc.text('Debit (KES)', 400, y, { align: 'right' });
+        doc.text('Credit (KES)', 470, y, { align: 'right' });
+        doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
+        y += 18;
+        doc.font('Helvetica').fontSize(8);
+      }
+      
+      doc.text(row.trans_date || '-', 50, y);
+      doc.text((row.item || 'Transaction').substring(0, 30), 100, y);
+      doc.text((row.reference_no || '-').substring(0, 15), 250, y);
+      doc.text((row.receipt_no || '-').substring(0, 15), 320, y);
+      doc.text(debit > 0 ? debit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 400, y, { align: 'right' });
+      doc.text(credit > 0 ? credit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 470, y, { align: 'right' });
+      y += 15;
+    }
+    
+    y += 5;
+    doc.font('Helvetica-Bold');
+    doc.text('TOTALS', 100, y);
+    doc.text(totalDebit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+    doc.text(totalCredit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 470, y, { align: 'right' });
+    y += 15;
+    doc.text('CLOSING BALANCE', 100, y);
+    doc.text(runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
     
     doc.moveDown();
-    doc.font('Helvetica-Bold').text(`Closing Balance: KES ${runningBalance.toLocaleString(undefined, {minimumFractionDigits: 2})}`);
+    doc.fontSize(8).font('Helvetica');
+    doc.text('This is a computer-generated statement.', { align: 'center' });
+    doc.text(`Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
     doc.end();
     
   } catch (error) {
@@ -335,63 +493,186 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
 });
 
 // ============================================
-// HEALTH CHECK ENDPOINTS
+// LOCAL ENDPOINT: WITHDRAWABLE DEPOSIT STATEMENT PDF
 // ============================================
-app.get('/api/test-db', async (req, res) => {
-  try {
-    const result = await dbPool.query('SELECT NOW() as current_time');
-    res.json({ success: true, message: 'Database connected', time: result.rows[0].current_time });
-  } catch (error) {
-    res.json({ success: false, error: error.message });
-  }
-});
-
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', server: 'proxy-server', port: port, timestamp: new Date().toISOString() });
-});
-
-// ============================================
-// PROXY OTHER API REQUESTS TO LIVE SERVER
-// ============================================
-app.use('/api/v1', async (req, res, next) => {
-  // Skip our custom endpoints
-  if (req.path === '/loan-statement-direct' || req.path === '/loan-statement-table') {
-    return next();
-  }
+app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
+  const { accountNo, startDate, endDate } = req.body;
+  console.log(`\n📄 [LOCAL] Generating Withdrawable Statement for: ${accountNo}`);
   
   try {
-    const liveUrl = `https://memberportal.metro-sacco.com${req.originalUrl}`;
-    console.log(`   → Proxying to: ${liveUrl}`);
-    const response = await axios({ method: req.method, url: liveUrl, data: req.body, headers: { 'Content-Type': 'application/json' }, timeout: 30000 });
-    res.status(response.status).json(response.data);
+    const headerResult = await dbPool.query("SELECT header_name FROM pb_header LIMIT 1");
+    const organisationName = headerResult.rows[0]?.header_name || 'METROPOLITAN HOSPITAL SACCO LTD';
+    
+    const accountResult = await dbPool.query(
+      `SELECT holders_name, acc_no, tel1, postal_code, postal_address, id_no, email_add
+       FROM pb_wdeposit_register WHERE acc_no = $1`,
+      [accountNo]
+    );
+    
+    if (accountResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+    const account = accountResult.rows[0];
+    
+    const openingResult = await dbPool.query(
+      `SELECT COALESCE(SUM(credit - debit), 0) as opening_balance
+       FROM ac_wdeposit_payable 
+       WHERE account_no = $1 AND date::date < $2::date`,
+      [accountNo, startDate]
+    );
+    const openingBalance = parseFloat(openingResult.rows[0]?.opening_balance || 0);
+    
+    const transResult = await dbPool.query(
+      `SELECT TO_CHAR(date, 'DD/MM/YYYY') as trans_date,
+              initcap(item) as item, reference_no, receipt_no,
+              COALESCE(debit, 0) as debit, COALESCE(credit, 0) as credit
+       FROM ac_wdeposit_payable 
+       WHERE account_no = $1 
+         AND date::date BETWEEN $2::date AND $3::date
+         AND (debit <> 0 OR credit <> 0)
+       ORDER BY date ASC`,
+      [accountNo, startDate, endDate]
+    );
+    
+    const interestResult = await dbPool.query(
+      `SELECT COALESCE(SUM(credit - debit), 0) as period_interest
+       FROM ac_wdeposit_payable 
+       WHERE account_no = $1 
+         AND date::date BETWEEN $2::date AND $3::date
+         AND reference_no ILIKE 'WINT%'`,
+      [accountNo, startDate, endDate]
+    );
+    
+    const periodInterest = parseFloat(interestResult.rows[0]?.period_interest || 0);
+    
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    const chunks = [];
+    
+    doc.on('data', chunk => chunks.push(chunk));
+    doc.on('end', () => {
+      const pdfBuffer = Buffer.concat(chunks);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=withdrawable-statement-${accountNo}.pdf`);
+      res.send(pdfBuffer);
+    });
+    
+    doc.fontSize(16).font('Helvetica-Bold').text(organisationName, { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(14).font('Helvetica-Bold').text('WITHDRAWABLE DEPOSITS STATEMENT', { align: 'center' });
+    doc.moveDown();
+    
+    doc.fontSize(10).font('Helvetica-Bold').text('ACCOUNT INFORMATION');
+    doc.font('Helvetica');
+    doc.text(`Name: ${account.holders_name || 'N/A'}`);
+    doc.text(`Account No: ${account.acc_no || accountNo}`);
+    doc.text(`ID No: ${account.id_no || 'N/A'}`);
+    doc.text(`Phone: ${account.tel1 || 'N/A'}`);
+    doc.text(`Email: ${account.email_add || 'N/A'}`);
+    doc.moveDown();
+    
+    doc.font('Helvetica-Bold').text(`STATEMENT PERIOD: ${new Date(startDate).toLocaleDateString('en-GB')} TO ${new Date(endDate).toLocaleDateString('en-GB')}`);
+    doc.text(`Print Date: ${new Date().toLocaleDateString('en-GB')}`);
+    doc.moveDown();
+    
+    doc.font('Helvetica-Bold').text('TRANSACTION HISTORY', { underline: true });
+    doc.moveDown(0.5);
+    
+    let runningBalance = openingBalance;
+    let totalDebit = 0, totalCredit = 0;
+    let y = doc.y + 10;
+    
+    doc.font('Helvetica-Bold').fontSize(8);
+    doc.text('Date', 50, y);
+    doc.text('Narration', 100, y);
+    doc.text('Ref No', 250, y);
+    doc.text('Receipt No', 320, y);
+    doc.text('Withdrawn (KES)', 400, y, { align: 'right' });
+    doc.text('Deposited (KES)', 470, y, { align: 'right' });
+    doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
+    y += 18;
+    doc.font('Helvetica').fontSize(8);
+    
+    doc.text('-', 50, y);
+    doc.text('BAL/BF', 100, y);
+    doc.text('-', 250, y);
+    doc.text('-', 320, y);
+    doc.text(openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+    doc.text('-', 470, y, { align: 'right' });
+    y += 15;
+    
+    for (const row of transResult.rows) {
+      const debit = parseFloat(row.debit) || 0;
+      const credit = parseFloat(row.credit) || 0;
+      runningBalance = runningBalance + credit - debit;
+      totalDebit += debit;
+      totalCredit += credit;
+      
+      if (y > 700) {
+        doc.addPage();
+        y = 50;
+        doc.font('Helvetica-Bold').fontSize(8);
+        doc.text('Date', 50, y);
+        doc.text('Narration', 100, y);
+        doc.text('Ref No', 250, y);
+        doc.text('Receipt No', 320, y);
+        doc.text('Withdrawn (KES)', 400, y, { align: 'right' });
+        doc.text('Deposited (KES)', 470, y, { align: 'right' });
+        doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
+        y += 18;
+        doc.font('Helvetica').fontSize(8);
+      }
+      
+      doc.text(row.trans_date || '-', 50, y);
+      doc.text((row.item || 'Transaction').substring(0, 35), 100, y);
+      doc.text((row.reference_no || '-').substring(0, 15), 250, y);
+      doc.text((row.receipt_no || '-').substring(0, 15), 320, y);
+      doc.text(debit > 0 ? debit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 400, y, { align: 'right' });
+      doc.text(credit > 0 ? credit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 470, y, { align: 'right' });
+      y += 15;
+    }
+    
+    y += 5;
+    doc.font('Helvetica-Bold');
+    doc.text('TOTALS', 100, y);
+    doc.text(totalDebit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+    doc.text(totalCredit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 470, y, { align: 'right' });
+    y += 15;
+    doc.text('CLOSING BALANCE', 100, y);
+    doc.text(runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+    y += 20;
+    
+    if (periodInterest !== 0) {
+      doc.font('Helvetica-Bold').text('INTEREST INFORMATION', { underline: true });
+      doc.font('Helvetica');
+      doc.text(`INTEREST FOR THE PERIOD: KES ${periodInterest.toLocaleString(undefined, { minimumFractionDigits: 2 })}`);
+    }
+    
+    doc.moveDown();
+    doc.fontSize(8).font('Helvetica');
+    doc.text('This is a computer-generated statement.', { align: 'center' });
+    doc.text(`Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
+    doc.end();
+    
   } catch (error) {
-    console.error('   ✗ Proxy error:', error.message);
+    console.error('   ❌ Error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-app.use('/api', async (req, res) => {
-  try {
-    const liveUrl = `https://memberportal.metro-sacco.com${req.originalUrl}`;
-    const response = await axios({ method: req.method, url: liveUrl, data: req.body, headers: { 'Content-Type': 'application/json' } });
-    res.status(response.status).json(response.data);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
+// ============================================
 // Start the server
+// ============================================
 app.listen(port, '0.0.0.0', () => {
-  console.log(`\n${'='.repeat(50)}`);
-  console.log(`🚀 PROXY SERVER RUNNING`);
-  console.log(`${'='.repeat(50)}`);
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`🚀 PROXY SERVER RUNNING ON PORT ${port}`);
+  console.log(`${'='.repeat(60)}`);
   console.log(`📍 URL: http://localhost:${port}`);
-  console.log(`\n🆕 NEW API - Returns JSON for table display:`);
-  console.log(`   POST /api/v1/loan-statement-table`);
-  console.log(`\n📄 ORIGINAL API - Returns PDF:`);
-  console.log(`   POST /api/v1/loan-statement-direct`);
-  console.log(`\n🔍 TEST ENDPOINTS:`);
-  console.log(`   GET  /api/test-db`);
-  console.log(`   GET  /api/health`);
-  console.log(`${'='.repeat(50)}\n`);
+  console.log(`\n✅ LOCAL ENDPOINTS (handled by this proxy):`);
+  console.log(`   POST   /api/v1/loan/apply - Submit loan application`);
+  console.log(`   GET    /api/v1/instant/:memberNo - Fetch member's loans`);
+  console.log(`   POST   /api/v1/auth/change-password`);
+  console.log(`   POST   /api/v1/loan-statement-direct`);
+  console.log(`   POST   /api/v1/withdrawable-statement-direct`);
+  console.log(`\n🔄 All other /api/v1/* requests will be forwarded to live server`);
+  console.log(`${'='.repeat(60)}\n`);
 });

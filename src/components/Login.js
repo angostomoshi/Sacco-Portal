@@ -3,7 +3,6 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import logo from '../log.png';
 
-
 const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
   const navigate = useNavigate();
   const [memberNumber, setMemberNumber] = useState('');
@@ -11,6 +10,9 @@ const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+
+  // Use proxy server (relative URL) - this will go to http://localhost:3023 due to package.json proxy
+  const API_BASE = '/api/v1';
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -24,8 +26,8 @@ const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
     setLoading(true);
     
     try {
-      // First, authenticate the user
-      const authResponse = await fetch('/api/v1/auth/authenticate', {
+      // Call through proxy server (NOT directly to live server)
+      const authResponse = await fetch(`${API_BASE}/auth/authenticate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -49,9 +51,9 @@ const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
           localStorage.setItem('authToken', authData.token);
         }
         
-        // Now fetch the full member details using the member number
+        // Fetch member details through proxy
         try {
-          const memberResponse = await fetch(`/api/v1/member/${memberNumber.trim()}`, {
+          const memberResponse = await fetch(`${API_BASE}/member/${memberNumber.trim()}`, {
             method: 'GET',
             headers: {
               'Content-Type': 'application/json',
@@ -66,29 +68,58 @@ const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
             // Store member details
             localStorage.setItem('memberData', JSON.stringify(memberData));
             
-            // Store holders name if available
-            if (memberData.holdersName) {
-              localStorage.setItem('holdersName', memberData.holdersName);
-              localStorage.setItem('userName', memberData.holdersName);
+            // Extract name from response
+            let userName = '';
+            if (memberData.data && memberData.data.holders_name) {
+              userName = memberData.data.holders_name;
+            } else if (memberData.holders_name) {
+              userName = memberData.holders_name;
+            } else if (memberData.holdersName) {
+              userName = memberData.holdersName;
             }
             
-            // Store account number
-            if (memberData.accNo) {
-              localStorage.setItem('accountNo', memberData.accNo);
+            if (userName) {
+              localStorage.setItem('holdersName', userName);
+              localStorage.setItem('userName', userName);
+            }
+            
+            // Extract account number
+            let accountNo = '';
+            if (memberData.data && memberData.data.acc_no) {
+              accountNo = memberData.data.acc_no;
+            } else if (memberData.acc_no) {
+              accountNo = memberData.acc_no;
+            } else if (memberData.accNo) {
+              accountNo = memberData.accNo;
+            }
+            
+            if (accountNo) {
+              localStorage.setItem('accountNo', accountNo);
+            } else {
+              localStorage.setItem('accountNo', memberNumber.trim());
             }
             
             // Create and store initials
-            if (memberData.holdersName) {
-              const names = memberData.holdersName.split(' ');
+            if (userName) {
+              const names = userName.split(' ');
               const initials = names.map(n => n[0]).join('').toUpperCase().substring(0, 2);
               localStorage.setItem('userInitials', initials);
             } else {
               localStorage.setItem('userInitials', memberNumber.trim().substring(0, 2).toUpperCase());
             }
             
-            // Store member ID if available
-            if (memberData.id) {
-              localStorage.setItem('memberId', String(memberData.id));
+            // Store member ID
+            let memberId = '';
+            if (memberData.data && memberData.data.id_no) {
+              memberId = memberData.data.id_no;
+            } else if (memberData.id_no) {
+              memberId = memberData.id_no;
+            } else if (memberData.id) {
+              memberId = memberData.id;
+            }
+            
+            if (memberId) {
+              localStorage.setItem('memberId', String(memberId));
             }
             
             if (onLogin) {

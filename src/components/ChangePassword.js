@@ -1,4 +1,3 @@
-// ChangePassword.js - All fields visible at once (matching your image)
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import logo from '../log.png';
@@ -23,7 +22,7 @@ const ChangePassword = () => {
     });
   };
 
-  // Send OTP to the backend using the correct endpoint
+  // Send OTP - CALL PROXY SERVER DIRECTLY
   const handleSendOtp = async () => {
     if (!formData.memberNo.trim()) {
       setError('Please enter Member Number');
@@ -34,7 +33,8 @@ const ChangePassword = () => {
     setError('');
     
     try {
-      const response = await fetch('/api/v1/auth/registerOtp', {
+      // DIRECT CALL TO PROXY SERVER ON PORT 3023
+      const response = await fetch('http://localhost:3023/api/v1/auth/registerOtp', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -44,13 +44,13 @@ const ChangePassword = () => {
         })
       });
       
+      const data = await response.json();
+      
       if (response.status === 201 || response.ok) {
-        const data = await response.json();
-        setSuccess(data.message || 'OTP sent successfully! Check your phone/email');
+        setSuccess(data.message || 'OTP sent successfully! Check your phone');
         setTimeout(() => setSuccess(''), 3000);
       } else {
-        const errorData = await response.json();
-        setError(errorData.message || 'Failed to send OTP');
+        setError(data.message || 'Failed to send OTP');
       }
     } catch (err) {
       console.error('Error sending OTP:', err);
@@ -60,12 +60,11 @@ const ChangePassword = () => {
     setLoading(false);
   };
 
-  // Change password
+  // Change password - CALL PROXY SERVER DIRECTLY
   const handleChangePassword = async (e) => {
     e.preventDefault();
     setError('');
     
-    // Validations
     if (!formData.memberNo.trim()) {
       setError('Please enter Member Number');
       return;
@@ -94,7 +93,8 @@ const ChangePassword = () => {
     setLoading(true);
     
     try {
-      const response = await fetch('https://memberportal.metro-sacco.com/ChangePassword', {
+      // DIRECT CALL TO PROXY SERVER ON PORT 3023
+      const response = await fetch('http://localhost:3023/api/v1/auth/change-password', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -103,19 +103,19 @@ const ChangePassword = () => {
           memberNo: formData.memberNo,
           otp: formData.otp,
           newPassword: formData.password,
-          action: 'changePassword'
+          confirmPassword: formData.confirmPassword
         })
       });
       
+      const data = await response.json();
+      
       if (response.ok) {
-        const data = await response.json();
         setSuccess(data.message || 'Password changed successfully! Redirecting to login...');
         setTimeout(() => {
           navigate('/login');
         }, 2000);
       } else {
-        const errorData = await response.json();
-        setError(errorData.message || 'Failed to change password');
+        setError(data.message || 'Failed to change password');
       }
     } catch (err) {
       console.error('Error changing password:', err);
@@ -167,7 +167,6 @@ const ChangePassword = () => {
           )}
           
           <form onSubmit={handleChangePassword}>
-            {/* Member No Field */}
             <div className="form-group">
               <label className="form-label">Member No</label>
               <input
@@ -180,7 +179,6 @@ const ChangePassword = () => {
               />
             </div>
 
-            {/* Send Otp Button */}
             <button 
               type="button"
               onClick={handleSendOtp}
@@ -190,7 +188,6 @@ const ChangePassword = () => {
               {loading ? 'Sending...' : 'Send Otp'}
             </button>
 
-            {/* OTP Field */}
             <div className="form-group">
               <label className="form-label">OTP</label>
               <input
@@ -203,7 +200,6 @@ const ChangePassword = () => {
               />
             </div>
 
-            {/* Password Field */}
             <div className="form-group">
               <label className="form-label">Password</label>
               <input
@@ -212,11 +208,10 @@ const ChangePassword = () => {
                 className="form-control"
                 value={formData.password}
                 onChange={handleChange}
-                placeholder="New password"
+                placeholder="New password (min 4 characters)"
               />
             </div>
 
-            {/* Password Confirmation Field */}
             <div className="form-group">
               <label className="form-label">Password Confirmation</label>
               <input
@@ -229,7 +224,6 @@ const ChangePassword = () => {
               />
             </div>
 
-            {/* Change Password Button */}
             <button 
               type="submit" 
               className="login-btn" 
