@@ -9,7 +9,7 @@ const port = 3023;
 
 // CORS configuration
 app.use(cors({
-  origin: 'http://localhost:3000',
+  origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Cookie', 'X-Requested-With']
@@ -37,11 +37,11 @@ app.use((req, res, next) => {
 
 // Database connection
 const dbPool = new Pool({
-  host: '192.168.4.10',
-  port: 5432,
-  database: 'sacco',
-  user: 'postgres',
-  password: 'legacy#007',
+  host: process.env.DB_HOST || '192.168.4.10',
+  port: process.env.DB_PORT || 5432,
+  database: process.env.DB_NAME || 'sacco',
+  user: process.env.DB_USER || 'postgres',
+  password: process.env.DB_PASSWORD || 'legacy#007',
   ssl: false,
   connectionTimeoutMillis: 10000,
 });
@@ -54,13 +54,12 @@ dbPool.connect((err) => {
   }
 });
 
-const LIVE_API_BASE = 'https://memberportal.metro-sacco.com/api/v1';
+const LIVE_API_BASE = 'http://192.168.4.6:3023/api/v1';
 
 // ============================================
 // MIDDLEWARE: Check if request should be handled locally or forwarded
 // ============================================
 const LOCAL_ENDPOINTS = [
-  '/auth/change-password',
   '/loan-statement-direct', 
   '/withdrawable-statement-direct',
   '/loan/apply',
@@ -85,25 +84,50 @@ app.use('/api/v1', async (req, res, next) => {
     const liveUrl = `${LIVE_API_BASE}${req.path}`;
     console.log(`   🔄 FORWARDING to: ${liveUrl}`);
     
+    // Build forwarded headers - include cookies and all original headers
+    const forwardHeaders = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    
+    // Forward Authorization token if present
+    if (req.headers.authorization) {
+      forwardHeaders['Authorization'] = req.headers.authorization;
+    }
+    
+    // Forward cookies (important for Spring Security CSRF/session)
+    if (req.headers.cookie) {
+      forwardHeaders['Cookie'] = req.headers.cookie;
+    }
+    
+    // Forward X-XSRF-TOKEN if present (Spring CSRF token)
+    if (req.headers['x-xsrf-token']) {
+      forwardHeaders['X-XSRF-TOKEN'] = req.headers['x-xsrf-token'];
+    }
+    
     const response = await axios({
       method: req.method,
       url: liveUrl,
       data: req.body,
       params: req.query,
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        ...(req.headers.authorization && { 'Authorization': req.headers.authorization })
-      },
-      timeout: 30000
+      headers: forwardHeaders,
+      timeout: 30000,
+      withCredentials: true
     });
     
     console.log(`   ✅ Response: ${response.status}`);
+    
+    // Forward any Set-Cookie headers from the live server back to the client
+    if (response.headers['set-cookie']) {
+      res.setHeader('Set-Cookie', response.headers['set-cookie']);
+    }
+    
     res.status(response.status).json(response.data);
   } catch (error) {
     console.error(`   ❌ Forwarding error:`, error.message);
     if (error.response) {
       console.log(`   📝 Live server responded with: ${error.response.status}`);
+      console.log(`   📝 Response body:`, JSON.stringify(error.response.data));
       res.status(error.response.status).json(error.response.data);
     } else {
       res.status(500).json({ error: 'Failed to connect to live server', message: error.message });
