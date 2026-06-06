@@ -3,7 +3,7 @@ const cors = require('cors');
 const axios = require('axios');
 const { Pool } = require('pg');
 const PDFDocument = require('pdfkit');
-const bcrypt = require('bcrypt'); // Add this for password hashing
+const bcrypt = require('bcrypt');
 
 const app = express();
 const port = process.env.PORT || 3023; // Use environment variable for port
@@ -55,8 +55,7 @@ dbPool.connect((err) => {
   }
 });
 
-const LIVE_API_BASE = 'http://192.168.4.6:3023/api/v1';
-const LIVE_API_BASE = process.env.LIVE_API_BASE || 'https://memberportal.metro-sacco.com/api/v1';
+const LIVE_API_BASE = process.env.LIVE_API_BASE || 'http://192.168.4.6:3023/api/v1';
 
 // ============================================
 // LOCAL ENDPOINTS (including change-password)
