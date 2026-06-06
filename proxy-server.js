@@ -10,7 +10,7 @@ const port = process.env.PORT || 3023; // Use environment variable for port
 
 // CORS configuration
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://yourdomain.com'], // Add your live frontend domain
+  origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Cookie', 'X-Requested-With']
@@ -55,6 +55,7 @@ dbPool.connect((err) => {
   }
 });
 
+const LIVE_API_BASE = 'http://192.168.4.6:3023/api/v1';
 const LIVE_API_BASE = process.env.LIVE_API_BASE || 'https://memberportal.metro-sacco.com/api/v1';
 
 // ============================================
@@ -94,27 +95,53 @@ app.use('/api/v1', async (req, res, next) => {
   
   try {
     const liveUrl = `${LIVE_API_BASE}${req.path}`;
-    console.log(`   📡 Forwarding to: ${liveUrl}`);
+    console.log(`   🔄 FORWARDING to: ${liveUrl}`);
+    
+    // Build forwarded headers - include cookies and all original headers
+    const forwardHeaders = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    
+    // Forward Authorization token if present
+    if (req.headers.authorization) {
+      forwardHeaders['Authorization'] = req.headers.authorization;
+    }
+    
+    // Forward cookies (important for Spring Security CSRF/session)
+    if (req.headers.cookie) {
+      forwardHeaders['Cookie'] = req.headers.cookie;
+    }
+    
+    // Forward X-XSRF-TOKEN if present (Spring CSRF token)
+    if (req.headers['x-xsrf-token']) {
+      forwardHeaders['X-XSRF-TOKEN'] = req.headers['x-xsrf-token'];
+    }
     
     const response = await axios({
       method: req.method,
       url: liveUrl,
       data: req.body,
       params: req.query,
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        ...(req.headers.authorization && { 'Authorization': req.headers.authorization })
-      },
-      timeout: 30000
+      headers: forwardHeaders,
+      timeout: 30000,
+      withCredentials: true
     });
     
-    console.log(`   ✅ Live server responded with status: ${response.status}`);
-    return res.status(response.status).json(response.data);
+    console.log(`   ✅ Response: ${response.status}`);
+    
+    // Forward any Set-Cookie headers from the live server back to the client
+    if (response.headers['set-cookie']) {
+      res.setHeader('Set-Cookie', response.headers['set-cookie']);
+    }
+    
+    res.status(response.status).json(response.data);
   } catch (error) {
     console.error(`   ❌ Forwarding error:`, error.message);
     if (error.response) {
-      return res.status(error.response.status).json(error.response.data);
+      console.log(`   📝 Live server responded with: ${error.response.status}`);
+      console.log(`   📝 Response body:`, JSON.stringify(error.response.data));
+      res.status(error.response.status).json(error.response.data);
     } else {
       return res.status(500).json({ error: 'Failed to connect to live server', message: error.message });
     }

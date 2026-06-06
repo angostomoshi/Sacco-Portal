@@ -5,7 +5,11 @@
   "proxy": "http://localhost:3023",
   "dependencies": {
     "axios": "^1.16.1",
+<<<<<<< HEAD
     "bcrypt": "^6.0.0",
+=======
+    "bcryptjs": "^3.0.3",
+>>>>>>> 00a71f51d084808f2fa6d78855e050d645bc8b65
     "chart.js": "^4.5.1",
     "cors": "^2.8.6",
     "express": "^5.2.1",

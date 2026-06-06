@@ -33,8 +33,8 @@ const ChangePassword = () => {
     setError('');
     
     try {
-      // DIRECT CALL TO PROXY SERVER ON PORT 3023
-      const response = await fetch('http://localhost:3023/api/v1/auth/registerOtp', {
+      // Use proxy server (relative URL)
+      const response = await fetch('/api/v1/auth/registerOtp', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -93,8 +93,8 @@ const ChangePassword = () => {
     setLoading(true);
     
     try {
-      // DIRECT CALL TO PROXY SERVER ON PORT 3023
-      const response = await fetch('http://localhost:3023/api/v1/auth/change-password', {
+      // Use proxy server (relative URL)
+      const response = await fetch('/api/v1/auth/change-password', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
