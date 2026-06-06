@@ -58,6 +58,34 @@ dbPool.connect((err) => {
 const LIVE_API_BASE = process.env.LIVE_API_BASE || 'http://192.168.4.6:3023/api/v1';
 
 // ============================================
+// UTILITY FUNCTIONS
+// ============================================
+// Convert DD/MM/YYYY format to YYYY-MM-DD for PostgreSQL
+function convertDateFormat(dateStr) {
+  if (!dateStr) return null;
+  
+  // Handle multiple formats
+  if (dateStr.includes('/')) {
+    // DD/MM/YYYY format
+    const [day, month, year] = dateStr.split('/');
+    return `${year}-${month}-${day}`;
+  } else if (dateStr.includes('-') && dateStr.length === 10) {
+    // Already in YYYY-MM-DD or DD-MM-YYYY format - check if it's already correct
+    const parts = dateStr.split('-');
+    if (parts[0].length === 4) {
+      // Already YYYY-MM-DD
+      return dateStr;
+    } else {
+      // DD-MM-YYYY format
+      const [day, month, year] = parts;
+      return `${year}-${month}-${day}`;
+    }
+  }
+  
+  return dateStr;
+}
+
+// ============================================
 // LOCAL ENDPOINTS (including change-password)
 // ============================================
 const LOCAL_ENDPOINTS = [
@@ -73,6 +101,9 @@ const LOCAL_ENDPOINTS = [
 // ============================================
 app.use('/api/v1', async (req, res, next) => {
   console.log(`\n🔍 Checking path: ${req.path}`);
+  console.log(`   📍 req.baseUrl: ${req.baseUrl}`);
+  console.log(`   📍 req.path: ${req.path}`);
+  console.log(`   📍 LOCAL_ENDPOINTS:`, LOCAL_ENDPOINTS);
   
   // Check if this is a local endpoint
   const isLocalEndpoint = LOCAL_ENDPOINTS.some(endpoint => {
@@ -198,6 +229,8 @@ app.post('/api/v1/auth/change-password', async (req, res) => {
     }
     
     console.log(`   ✅ Password updated successfully for member: ${memberNo}`);
+    console.log(`   📝 Updated record:`, updateResult.rows[0]);
+    console.log(`   🔍 Hashed password length: ${hashedPassword.length}, starts with: ${hashedPassword.substring(0, 10)}...`);
     
     // Return success response (matching the expected format)
     res.status(200).json({
@@ -380,8 +413,14 @@ app.post('/api/v1/loan/apply', async (req, res) => {
 app.post('/api/v1/loan-statement-direct', async (req, res) => {
   const { loanNo, memberNo, startDate, endDate } = req.body;
   console.log(`\n📄 [LOCAL] Generating PDF for Loan: ${loanNo}`);
+  console.log(`   📅 Received dates - Start: ${startDate}, End: ${endDate}`);
   
   try {
+    // Convert dates from DD/MM/YYYY to YYYY-MM-DD format
+    const convertedStartDate = convertDateFormat(startDate);
+    const convertedEndDate = convertDateFormat(endDate);
+    console.log(`   📅 Converted dates - Start: ${convertedStartDate}, End: ${convertedEndDate}`);
+    
     const headerResult = await dbPool.query("SELECT header_name FROM pb_header LIMIT 1");
     const organisationName = headerResult.rows[0]?.header_name || 'METROPOLITAN HOSPITAL SACCO LTD';
     
@@ -411,7 +450,7 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
       `SELECT COALESCE(SUM(balance - credit_bal), 0) as opening_balance
        FROM ac_debtors 
        WHERE account_no = $1 AND invoice_no = $2 AND date::date < $3::date`,
-      [memberNo, loanNo, startDate]
+      [memberNo, loanNo, convertedStartDate]
     );
     const openingBalance = parseFloat(openingResult.rows[0]?.opening_balance || 0);
     
@@ -424,7 +463,7 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
          AND date::date BETWEEN $3::date AND $4::date
          AND (balance <> 0 OR credit_bal <> 0)
        ORDER BY date ASC`,
-      [memberNo, loanNo, startDate, endDate]
+      [memberNo, loanNo, convertedStartDate, convertedEndDate]
     );
     
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
@@ -547,8 +586,14 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
 app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
   const { accountNo, startDate, endDate } = req.body;
   console.log(`\n📄 [LOCAL] Generating Withdrawable Statement for: ${accountNo}`);
+  console.log(`   📅 Received dates - Start: ${startDate}, End: ${endDate}`);
   
   try {
+    // Convert dates from DD/MM/YYYY to YYYY-MM-DD format
+    const convertedStartDate = convertDateFormat(startDate);
+    const convertedEndDate = convertDateFormat(endDate);
+    console.log(`   📅 Converted dates - Start: ${convertedStartDate}, End: ${convertedEndDate}`);
+    
     const headerResult = await dbPool.query("SELECT header_name FROM pb_header LIMIT 1");
     const organisationName = headerResult.rows[0]?.header_name || 'METROPOLITAN HOSPITAL SACCO LTD';
     
@@ -567,7 +612,7 @@ app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
       `SELECT COALESCE(SUM(credit - debit), 0) as opening_balance
        FROM ac_wdeposit_payable 
        WHERE account_no = $1 AND date::date < $2::date`,
-      [accountNo, startDate]
+      [accountNo, convertedStartDate]
     );
     const openingBalance = parseFloat(openingResult.rows[0]?.opening_balance || 0);
     
@@ -580,7 +625,7 @@ app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
          AND date::date BETWEEN $2::date AND $3::date
          AND (debit <> 0 OR credit <> 0)
        ORDER BY date ASC`,
-      [accountNo, startDate, endDate]
+      [accountNo, convertedStartDate, convertedEndDate]
     );
     
     const interestResult = await dbPool.query(
@@ -589,7 +634,7 @@ app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
        WHERE account_no = $1 
          AND date::date BETWEEN $2::date AND $3::date
          AND reference_no ILIKE 'WINT%'`,
-      [accountNo, startDate, endDate]
+      [accountNo, convertedStartDate, convertedEndDate]
     );
     
     const periodInterest = parseFloat(interestResult.rows[0]?.period_interest || 0);
