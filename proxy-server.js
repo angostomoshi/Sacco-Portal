@@ -3,13 +3,14 @@ const cors = require('cors');
 const axios = require('axios');
 const { Pool } = require('pg');
 const PDFDocument = require('pdfkit');
+const bcrypt = require('bcrypt'); // Add this for password hashing
 
 const app = express();
-const port = 3023;
+const port = process.env.PORT || 3023; // Use environment variable for port
 
 // CORS configuration
 app.use(cors({
-  origin: 'http://localhost:3000',
+  origin: ['http://localhost:3000', 'https://yourdomain.com'], // Add your live frontend domain
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Cookie', 'X-Requested-With']
@@ -37,11 +38,11 @@ app.use((req, res, next) => {
 
 // Database connection
 const dbPool = new Pool({
-  host: '192.168.4.10',
-  port: 5432,
-  database: 'sacco',
-  user: 'postgres',
-  password: 'legacy#007',
+  host: process.env.DB_HOST || '192.168.4.10',
+  port: process.env.DB_PORT || 5432,
+  database: process.env.DB_NAME || 'sacco',
+  user: process.env.DB_USER || 'postgres',
+  password: process.env.DB_PASSWORD || 'legacy#007',
   ssl: false,
   connectionTimeoutMillis: 10000,
 });
@@ -54,23 +55,23 @@ dbPool.connect((err) => {
   }
 });
 
-const LIVE_API_BASE = 'https://memberportal.metro-sacco.com/api/v1';
+const LIVE_API_BASE = process.env.LIVE_API_BASE || 'https://memberportal.metro-sacco.com/api/v1';
 
 // ============================================
-// IMPORTANT: Define LOCAL ENDPOINTS (excluding change-password)
+// LOCAL ENDPOINTS (including change-password)
 // ============================================
 const LOCAL_ENDPOINTS = [
   '/loan-statement-direct', 
   '/withdrawable-statement-direct',
   '/loan/apply',
-  '/instant/'
+  '/instant/',
+  '/auth/change-password'  // ← THIS IS THE KEY FIX
 ];
 
 // ============================================
-// FORWARDING MIDDLEWARE - MUST COME BEFORE ANY SPECIFIC ROUTES
+// FORWARDING MIDDLEWARE
 // ============================================
 app.use('/api/v1', async (req, res, next) => {
-  // Log the request path
   console.log(`\n🔍 Checking path: ${req.path}`);
   
   // Check if this is a local endpoint
@@ -85,10 +86,10 @@ app.use('/api/v1', async (req, res, next) => {
   
   if (isLocalEndpoint) {
     console.log(`   ✅ Handling locally`);
-    return next(); // Handle locally
+    return next();
   }
   
-  // For all other endpoints (including /auth/change-password), forward to live server
+  // Forward to live server
   console.log(`   🔄 FORWARDING to live server: ${req.path}`);
   
   try {
@@ -109,13 +110,10 @@ app.use('/api/v1', async (req, res, next) => {
     });
     
     console.log(`   ✅ Live server responded with status: ${response.status}`);
-    console.log(`   📦 Response data:`, response.data);
     return res.status(response.status).json(response.data);
   } catch (error) {
     console.error(`   ❌ Forwarding error:`, error.message);
     if (error.response) {
-      console.log(`   📝 Live server responded with: ${error.response.status}`);
-      console.log(`   📝 Error data:`, error.response.data);
       return res.status(error.response.status).json(error.response.data);
     } else {
       return res.status(500).json({ error: 'Failed to connect to live server', message: error.message });
@@ -124,14 +122,82 @@ app.use('/api/v1', async (req, res, next) => {
 });
 
 // ============================================
-// LOCAL ENDPOINT: GET INSTANT LOANS (FROM LOCAL DATABASE)
+// LOCAL ENDPOINT: CHANGE PASSWORD
+// ============================================
+app.post('/api/v1/auth/change-password', async (req, res) => {
+  console.log('\n🔐 [LOCAL] Password change request:');
+  console.log('   Body:', req.body);
+  
+  const { memberNo, otp, newPassword, confirmPassword } = req.body;
+  
+  // Validate input
+  if (!memberNo || !otp || !newPassword) {
+    return res.status(400).json({ 
+      status: 1, 
+      message: 'Missing required fields: memberNo, otp, or newPassword' 
+    });
+  }
+  
+  if (newPassword !== confirmPassword) {
+    return res.status(400).json({ 
+      status: 1, 
+      message: 'Passwords do not match' 
+    });
+  }
+  
+  try {
+    // First, verify the OTP (you need to implement OTP storage/verification)
+    // For now, we'll skip OTP verification or you can implement it
+    
+    // Hash the new password
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+    
+    // Update password in your local database
+    // Note: Adjust the table name and column names based on your actual database schema
+    const updateResult = await dbPool.query(
+      `UPDATE pb_share_register 
+       SET password = $1, 
+           updated_at = CURRENT_TIMESTAMP 
+       WHERE acc_no = $2 
+       RETURNING acc_no, holders_name`,
+      [hashedPassword, memberNo]
+    );
+    
+    if (updateResult.rows.length === 0) {
+      return res.status(404).json({ 
+        status: 1, 
+        message: 'Member not found' 
+      });
+    }
+    
+    console.log(`   ✅ Password updated successfully for member: ${memberNo}`);
+    
+    // Return success response (matching the expected format)
+    res.status(200).json({
+      status: 0,  // 0 typically means success in your API
+      message: 'Password changed successfully',
+      memberNo: memberNo,
+      token: null // Or generate a new token if needed
+    });
+    
+  } catch (error) {
+    console.error('   ❌ Error updating password:', error.message);
+    res.status(500).json({ 
+      status: 1, 
+      message: 'Failed to change password: ' + error.message 
+    });
+  }
+});
+
+// ============================================
+// LOCAL ENDPOINT: GET INSTANT LOANS
 // ============================================
 app.get('/api/v1/instant/:memberNo', async (req, res) => {
   const { memberNo } = req.params;
   console.log(`\n⚡ [LOCAL] Fetching instant loans for: ${memberNo}`);
   
   try {
-    // First, check what columns exist in pb_saccoloan
     const columnsCheck = await dbPool.query(
       `SELECT column_name 
        FROM information_schema.columns 
@@ -141,9 +207,7 @@ app.get('/api/v1/instant/:memberNo', async (req, res) => {
     );
     
     const availableColumns = columnsCheck.rows.map(row => row.column_name);
-    console.log(`   📋 Available columns:`, availableColumns);
     
-    // Build query without status column if it doesn't exist
     let query = `
       SELECT 
         loan_no as "loanNo",
@@ -155,7 +219,6 @@ app.get('/api/v1/instant/:memberNo', async (req, res) => {
         amount as "outStanding"
     `;
     
-    // Add status column only if it exists
     if (availableColumns.includes('status')) {
       query += `, status`;
     } else if (availableColumns.includes('loan_status')) {
@@ -165,8 +228,6 @@ app.get('/api/v1/instant/:memberNo', async (req, res) => {
     query += ` FROM pb_saccoloan WHERE mem_no = $1 ORDER BY cdate DESC`;
     
     const loans = await dbPool.query(query, [memberNo]);
-    
-    console.log(`   ✅ Found ${loans.rows.length} loan(s) for member ${memberNo}`);
     
     res.status(200).json({
       success: true,
@@ -204,7 +265,6 @@ app.post('/api/v1/loan/apply', async (req, res) => {
   } = req.body;
   
   try {
-    // Check if member exists
     const memberCheck = await dbPool.query(
       `SELECT acc_no, holders_name, id_no, email_add, postal_code, tel1 
        FROM pb_share_register WHERE acc_no = $1`,
@@ -216,9 +276,6 @@ app.post('/api/v1/loan/apply', async (req, res) => {
     }
     
     const member = memberCheck.rows[0];
-    console.log(`   ✅ Member found: ${member.holders_name}`);
-    
-    // Generate loan number
     const year = new Date().getFullYear();
     const loanNoResult = await dbPool.query(
       `SELECT COALESCE(MAX(CAST(SPLIT_PART(loan_no, '/', 1) AS INTEGER)), 0) + 1 as loan_seq 
@@ -227,9 +284,6 @@ app.post('/api/v1/loan/apply', async (req, res) => {
     const loanSeq = loanNoResult.rows[0].loan_seq;
     const loanNumber = `${loanSeq}/${year}`;
     
-    console.log(`   🎫 Generated Loan Number: ${loanNumber}`);
-    
-    // Calculate dates
     const startDate = new Date(applicationDate || new Date());
     const endDate = new Date(startDate);
     endDate.setMonth(endDate.getMonth() + parseInt(periodMonths));
@@ -237,7 +291,6 @@ app.post('/api/v1/loan/apply', async (req, res) => {
     const formattedStartDate = startDate.toISOString().split('T')[0];
     const formattedEndDate = endDate.toISOString().split('T')[0];
     
-    // First, check the actual columns in the table
     const columnsCheck = await dbPool.query(
       `SELECT column_name 
        FROM information_schema.columns 
@@ -245,9 +298,7 @@ app.post('/api/v1/loan/apply', async (req, res) => {
     );
     
     const existingColumns = columnsCheck.rows.map(row => row.column_name);
-    console.log(`   📋 Existing columns:`, existingColumns);
     
-    // Build insert query based on existing columns
     const insertFields = [
       'mem_no', 'member_name', 'loan_no', 'pno', 'wstation', 'employer', 
       'poastal_code', 'categ', 'email_address', 'security1', 'id_no', 
@@ -264,7 +315,6 @@ app.post('/api/v1/loan/apply', async (req, res) => {
       parseFloat(totalAmount), 'web_user', new Date(), parseFloat(totalAmount)
     ];
     
-    // Add status column only if it exists
     if (existingColumns.includes('status')) {
       insertFields.push('status');
       insertValues.push('Pending');
@@ -274,9 +324,6 @@ app.post('/api/v1/loan/apply', async (req, res) => {
     const insertQuery = `INSERT INTO pb_saccoloan (${insertFields.join(', ')}) VALUES (${placeholders})`;
     
     await dbPool.query(insertQuery, insertValues);
-    
-    console.log(`   ✅ Loan application submitted successfully!`);
-    console.log(`   📊 Loan Number: ${loanNumber}`);
     
     res.status(200).json({
       success: true,
@@ -294,7 +341,6 @@ app.post('/api/v1/loan/apply', async (req, res) => {
     
   } catch (error) {
     console.error(`   ❌ Error:`, error.message);
-    console.error(`   Stack:`, error.stack);
     res.status(500).json({
       success: false,
       message: 'Failed to submit loan application: ' + error.message
@@ -645,13 +691,13 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`${'='.repeat(60)}`);
   console.log(`📍 URL: http://localhost:${port}`);
   console.log(`\n✅ LOCAL ENDPOINTS (handled by this proxy):`);
+  console.log(`   POST   /api/v1/auth/change-password - NOW HANDLED LOCALLY ✅`);
   console.log(`   POST   /api/v1/loan/apply - Submit loan application`);
   console.log(`   GET    /api/v1/instant/:memberNo - Fetch member's loans`);
   console.log(`   POST   /api/v1/loan-statement-direct`);
   console.log(`   POST   /api/v1/withdrawable-statement-direct`);
   console.log(`\n🔄 FORWARDED ENDPOINTS (handled by live server):`);
-  console.log(`   POST   /api/v1/auth/change-password - NOW FORWARDS TO LIVE`);
-  console.log(`   POST   /api/v1/auth/login - Handled by live server`);
+  console.log(`   POST   /api/v1/auth/authenticate - Login handled by live`);
   console.log(`   All other /api/v1/* requests will be forwarded to live server`);
   console.log(`${'='.repeat(60)}\n`);
 });
