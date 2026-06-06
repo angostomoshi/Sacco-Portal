@@ -12,11 +12,11 @@ function WithdrawableStmt() {
   const [showModal, setShowModal] = useState(false);
   const [selectedAccount, setSelectedAccount] = useState(null);
   const [pdfUrl, setPdfUrl] = useState(null);
+  const [pdfBlob, setPdfBlob] = useState(null);
   const [statementLoading, setStatementLoading] = useState(false);
   
   const brandColor = '#00a3b5';
 
-  // Process withdrawable data
   const processWithdrawableData = (data) => {
     console.log('Raw API response:', JSON.stringify(data, null, 2));
     
@@ -52,7 +52,6 @@ function WithdrawableStmt() {
     }
   };
 
-  // Fetch header config
   const fetchHeaderConfig = async (token) => {
     try {
       const response = await fetch('/api/v1/header/1', {
@@ -76,7 +75,27 @@ function WithdrawableStmt() {
     };
   };
 
-  // Handle view statement
+  const handleDownloadPDF = () => {
+    if (pdfBlob && selectedAccount) {
+      const fileName = `withdrawable-statement-${selectedAccount.accNo}-${new Date().toISOString().split('T')[0]}.pdf`;
+      
+      const downloadUrl = URL.createObjectURL(pdfBlob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      setTimeout(() => {
+        URL.revokeObjectURL(downloadUrl);
+      }, 100);
+    } else {
+      console.error('No PDF blob available for download');
+      alert('PDF not ready for download. Please wait for the statement to load completely.');
+    }
+  };
+
   const handleViewStatement = async (account) => {
     setSelectedAccount(account);
     setStatementLoading(true);
@@ -85,6 +104,7 @@ function WithdrawableStmt() {
     if (pdfUrl) {
       URL.revokeObjectURL(pdfUrl);
       setPdfUrl(null);
+      setPdfBlob(null);
     }
     
     try {
@@ -111,6 +131,7 @@ function WithdrawableStmt() {
         const blob = await response.blob();
         const url = URL.createObjectURL(blob);
         setPdfUrl(url);
+        setPdfBlob(blob);
       } else {
         const errorData = await response.json();
         setError(errorData.message || errorData.error || 'Failed to generate statement');
@@ -130,6 +151,7 @@ function WithdrawableStmt() {
     if (pdfUrl) {
       URL.revokeObjectURL(pdfUrl);
       setPdfUrl(null);
+      setPdfBlob(null);
     }
   };
 
@@ -162,7 +184,6 @@ function WithdrawableStmt() {
     return String(value);
   };
 
-  // Main data fetch
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -196,7 +217,6 @@ function WithdrawableStmt() {
         console.log('Fetching data for member:', memberNumber);
         await fetchHeaderConfig(token);
         
-        // Fetch member data
         try {
           const memberResponse = await fetch(`/api/v1/member/${memberNumber}`, {
             method: 'GET',
@@ -212,7 +232,6 @@ function WithdrawableStmt() {
           console.error('Error fetching member data:', err);
         }
         
-        // Fetch withdrawable data
         const withdrawableUrl = `/api/v1/withDrawable/${memberNumber}`;
         console.log('Fetching from:', withdrawableUrl);
         
@@ -346,7 +365,9 @@ function WithdrawableStmt() {
                   </td>
                 </tr>
               )) : (
-                <tr><td colSpan="6" style={{ textAlign: 'center', padding: '2rem' }}>No withdrawable records found</td></tr>
+                <tr>
+                  <td colSpan="6" style={{ textAlign: 'center', padding: '2rem' }}>No withdrawable records found</td>
+                </tr>
               )}
             </tbody>
             {withdrawableData.length > 0 && (
@@ -375,10 +396,9 @@ function WithdrawableStmt() {
 
       {error && <div className="error-message">{error}</div>}
 
-      {/* Modal for displaying PDF statement */}
       {showModal && (
         <div className="modal-overlay" onClick={handleCloseModal}>
-          <div className="modal-container">
+          <div className="modal-container" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2>Withdrawable Statement - {selectedAccount?.accNo}</h2>
               <button className="modal-close" onClick={handleCloseModal}>×</button>
@@ -404,13 +424,12 @@ function WithdrawableStmt() {
             </div>
             <div className="modal-footer">
               {pdfUrl && (
-                <a
-                  href={pdfUrl}
-                  download={`withdrawable-statement-${selectedAccount?.accNo}.pdf`}
+                <button 
+                  onClick={handleDownloadPDF}
                   className="download-stmt-btn"
                 >
-                  📄 Download PDF
-                </a>
+                  ⬇️ Download PDF
+                </button>
               )}
               <button className="close-modal-btn" onClick={handleCloseModal}>Close</button>
             </div>
@@ -551,9 +570,15 @@ function WithdrawableStmt() {
           background: ${brandColor};
           color: white;
         }
+        .download-stmt-btn:hover {
+          opacity: 0.9;
+        }
         .close-modal-btn {
           background: #666;
           color: white;
+        }
+        .close-modal-btn:hover {
+          background: #555;
         }
         .pdf-viewer {
           width: 100%;

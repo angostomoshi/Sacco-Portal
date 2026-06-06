@@ -57,17 +57,22 @@ dbPool.connect((err) => {
 const LIVE_API_BASE = 'https://memberportal.metro-sacco.com/api/v1';
 
 // ============================================
-// MIDDLEWARE: Check if request should be handled locally or forwarded
+// IMPORTANT: Define LOCAL ENDPOINTS (excluding change-password)
 // ============================================
 const LOCAL_ENDPOINTS = [
-  '/auth/change-password',
   '/loan-statement-direct', 
   '/withdrawable-statement-direct',
   '/loan/apply',
-  '/instant/'  // Handle instant loans locally (includes memberNo parameter)
+  '/instant/'
 ];
 
+// ============================================
+// FORWARDING MIDDLEWARE - MUST COME BEFORE ANY SPECIFIC ROUTES
+// ============================================
 app.use('/api/v1', async (req, res, next) => {
+  // Log the request path
+  console.log(`\n🔍 Checking path: ${req.path}`);
+  
   // Check if this is a local endpoint
   const isLocalEndpoint = LOCAL_ENDPOINTS.some(endpoint => {
     if (endpoint === '/instant/') {
@@ -76,14 +81,19 @@ app.use('/api/v1', async (req, res, next) => {
     return req.path === endpoint;
   });
   
+  console.log(`   Is local endpoint? ${isLocalEndpoint}`);
+  
   if (isLocalEndpoint) {
+    console.log(`   ✅ Handling locally`);
     return next(); // Handle locally
   }
   
-  // Forward to live server
+  // For all other endpoints (including /auth/change-password), forward to live server
+  console.log(`   🔄 FORWARDING to live server: ${req.path}`);
+  
   try {
     const liveUrl = `${LIVE_API_BASE}${req.path}`;
-    console.log(`   🔄 FORWARDING to: ${liveUrl}`);
+    console.log(`   📡 Forwarding to: ${liveUrl}`);
     
     const response = await axios({
       method: req.method,
@@ -98,15 +108,17 @@ app.use('/api/v1', async (req, res, next) => {
       timeout: 30000
     });
     
-    console.log(`   ✅ Response: ${response.status}`);
-    res.status(response.status).json(response.data);
+    console.log(`   ✅ Live server responded with status: ${response.status}`);
+    console.log(`   📦 Response data:`, response.data);
+    return res.status(response.status).json(response.data);
   } catch (error) {
     console.error(`   ❌ Forwarding error:`, error.message);
     if (error.response) {
       console.log(`   📝 Live server responded with: ${error.response.status}`);
-      res.status(error.response.status).json(error.response.data);
+      console.log(`   📝 Error data:`, error.response.data);
+      return res.status(error.response.status).json(error.response.data);
     } else {
-      res.status(500).json({ error: 'Failed to connect to live server', message: error.message });
+      return res.status(500).json({ error: 'Failed to connect to live server', message: error.message });
     }
   }
 });
@@ -287,41 +299,6 @@ app.post('/api/v1/loan/apply', async (req, res) => {
       success: false,
       message: 'Failed to submit loan application: ' + error.message
     });
-  }
-});
-
-// ============================================
-// LOCAL ENDPOINT: CHANGE PASSWORD
-// ============================================
-app.post('/api/v1/auth/change-password', async (req, res) => {
-  const { memberNo, otp, newPassword, confirmPassword } = req.body;
-  
-  console.log(`\n🔐 [LOCAL] Password change request for: ${memberNo}`);
-  
-  if (newPassword !== confirmPassword) {
-    return res.status(400).json({ success: false, message: 'Passwords do not match' });
-  }
-  
-  if (!otp || otp.length !== 4) {
-    return res.status(400).json({ success: false, message: 'Please enter a valid 4-digit OTP' });
-  }
-  
-  try {
-    const memberCheck = await dbPool.query(`SELECT acc_no FROM pb_share_register WHERE acc_no = $1`, [memberNo]);
-    if (memberCheck.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Member not found.' });
-    }
-    
-    await dbPool.query(`UPDATE pb_share_register SET pass = $1 WHERE acc_no = $2`, [newPassword, memberNo]);
-    
-    console.log(`   ✅ Password updated successfully!`);
-    return res.status(200).json({
-      success: true,
-      message: `Password changed successfully! You can now login with your new password`
-    });
-  } catch (dbError) {
-    console.error(`   ❌ Database error:`, dbError.message);
-    return res.status(500).json({ success: false, message: 'Failed to change password.' });
   }
 });
 
@@ -670,9 +647,11 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`\n✅ LOCAL ENDPOINTS (handled by this proxy):`);
   console.log(`   POST   /api/v1/loan/apply - Submit loan application`);
   console.log(`   GET    /api/v1/instant/:memberNo - Fetch member's loans`);
-  console.log(`   POST   /api/v1/auth/change-password`);
   console.log(`   POST   /api/v1/loan-statement-direct`);
   console.log(`   POST   /api/v1/withdrawable-statement-direct`);
-  console.log(`\n🔄 All other /api/v1/* requests will be forwarded to live server`);
+  console.log(`\n🔄 FORWARDED ENDPOINTS (handled by live server):`);
+  console.log(`   POST   /api/v1/auth/change-password - NOW FORWARDS TO LIVE`);
+  console.log(`   POST   /api/v1/auth/login - Handled by live server`);
+  console.log(`   All other /api/v1/* requests will be forwarded to live server`);
   console.log(`${'='.repeat(60)}\n`);
 });

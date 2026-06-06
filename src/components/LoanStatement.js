@@ -1,4 +1,4 @@
-// LoanStatement.js - With View Statement button and modal that displays PDF with table format
+// LoanStatement.js - With proper API response handling, date formatting (no time), improved PDF handling
 import React, { useRef, useState, useEffect } from 'react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
@@ -14,44 +14,73 @@ function LoanStatement() {
   const [selectedLoan, setSelectedLoan] = useState(null);
   const [pdfUrl, setPdfUrl] = useState(null);
   const [statementLoading, setStatementLoading] = useState(false);
+  const [pdfBlob, setPdfBlob] = useState(null);
   
   const brandColor = '#00a3b5';
 
-  // Process loan data from API response - DISPLAY RAW DATA, NO CALCULATIONS
-  const processLoanData = (data) => {
-    console.log('Raw API response:', JSON.stringify(data, null, 2));
+ // Replace the formatDateOnly function with this version:
+const formatDateOnly = (dateString) => {
+  if (!dateString) return 'N/A';
+  try {
+    // Extract just the date part from ISO string (YYYY-MM-DD)
+    if (dateString.includes('T')) {
+      const datePart = dateString.split('T')[0]; // Gets "2026-06-04"
+      const [year, month, day] = datePart.split('-');
+      return `${day}/${month}/${year}`; // Returns "04/06/2026"
+    }
+    
+    // For other formats, try normal parsing
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return dateString;
+    return date.toLocaleDateString('en-GB');
+  } catch {
+    return dateString;
+  }
+};
+
+  // Process loan data from API response
+  const processLoanData = (responseData) => {
+    console.log('Processing API response:', responseData);
     
     let loans = [];
-    if (Array.isArray(data)) {
-      loans = data;
-    } else if (data && typeof data === 'object') {
-      if (data.data && Array.isArray(data.data)) loans = data.data;
-      else if (data.loans) loans = data.loans;
-      else if (data.instant) loans = data.instant;
-      else if (data.loanNo || data.amount) loans = [data];
+    
+    // Handle the actual API response structure: { success: true, data: [...], source: "local", count: 17 }
+    if (responseData && responseData.success === true && Array.isArray(responseData.data)) {
+      loans = responseData.data;
+    } 
+    // Fallback for other possible structures
+    else if (Array.isArray(responseData)) {
+      loans = responseData;
+    } 
+    else if (responseData && responseData.data && Array.isArray(responseData.data)) {
+      loans = responseData.data;
+    }
+    else if (responseData && responseData.loans && Array.isArray(responseData.loans)) {
+      loans = responseData.loans;
+    }
+    else if (responseData && responseData.instant && Array.isArray(responseData.instant)) {
+      loans = responseData.instant;
+    }
+    else if (responseData && (responseData.loanNo || responseData.amount)) {
+      loans = [responseData];
     }
     
-    // Display EXACT backend data - NO transformations
+    console.log('Extracted loans array:', loans);
+    
+    // Format the loans for display
     const formattedLoans = loans.map((item, index) => ({
       id: index,
-      loanNo: item.loanNo,
-      purpose: item.loanPurpose,
-      sdate: item.startDate,
-      edate: item.endDate,
-      period: item.period,
-      originalAmount: item.amount,
-      balance: item.outStanding,
+      loanNo: item.loanNo || 'N/A',
+      purpose: item.loanPurpose || 'N/A',
+      sdate: formatDateOnly(item.startDate),
+      edate: formatDateOnly(item.endDate),
+      period: item.period !== null && item.period !== undefined ? item.period : 'N/A',
+      originalAmount: parseFloat(item.amount) || 0,
+      balance: parseFloat(item.outStanding) || 0,
     }));
     
-    console.log('Formatted loans (raw backend data):', formattedLoans);
+    console.log('Formatted loans:', formattedLoans);
     setLoanData(formattedLoans);
-    
-    const totalLoaned = formattedLoans.reduce((sum, loan) => sum + (loan.originalAmount || 0), 0);
-    const totalBalance = formattedLoans.reduce((sum, loan) => sum + (loan.balance || 0), 0);
-    
-    if (formattedLoans.length > 0) {
-      localStorage.setItem('loanData', JSON.stringify({ loans: formattedLoans, totals: { totalLoaned, totalBalance } }));
-    }
   };
 
   // Fetch header config
@@ -83,11 +112,12 @@ function LoanStatement() {
     setStatementLoading(true);
     setShowModal(true);
     
-    // Clear previous PDF URL
+    // Clear previous PDF URL and blob
     if (pdfUrl) {
       URL.revokeObjectURL(pdfUrl);
       setPdfUrl(null);
     }
+    setPdfBlob(null);
     
     try {
       const token = localStorage.getItem('authToken');
@@ -110,14 +140,13 @@ function LoanStatement() {
       });
       
       if (response.ok) {
-        // Get the PDF blob
         const blob = await response.blob();
-        // Create a URL for the blob
+        setPdfBlob(blob);
         const url = URL.createObjectURL(blob);
         setPdfUrl(url);
       } else {
-        const error = await response.json();
-        setError(error.message || 'Failed to generate statement');
+        const errorData = await response.json().catch(() => ({}));
+        setError(errorData.message || 'Failed to generate statement');
       }
     } catch (err) {
       console.error('Error generating statement:', err);
@@ -127,10 +156,37 @@ function LoanStatement() {
     }
   };
 
+  const handleDownloadStatement = () => {
+    if (pdfBlob && selectedLoan) {
+      const downloadUrl = URL.createObjectURL(pdfBlob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `loan-statement-${selectedLoan.loanNo}-${new Date().toISOString().split('T')[0]}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(downloadUrl);
+    } else if (pdfUrl) {
+      fetch(pdfUrl)
+        .then(res => res.blob())
+        .then(blob => {
+          const downloadUrl = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = downloadUrl;
+          link.download = `loan-statement-${selectedLoan.loanNo}-${new Date().toISOString().split('T')[0]}.pdf`;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(downloadUrl);
+        })
+        .catch(err => console.error('Download failed:', err));
+    }
+  };
+
   const handleCloseModal = () => {
     setShowModal(false);
     setSelectedLoan(null);
-    // Clean up PDF URL to prevent memory leaks
+    setPdfBlob(null);
     if (pdfUrl) {
       URL.revokeObjectURL(pdfUrl);
       setPdfUrl(null);
@@ -160,22 +216,9 @@ function LoanStatement() {
     }
   };
 
-  // Display raw values exactly as from backend
-  const formatRawValue = (value) => {
+  const formatCurrency = (value) => {
     if (value === undefined || value === null) return 'N/A';
-    if (typeof value === 'number') return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return String(value);
-  };
-
-  const formatDate = (dateString) => {
-    if (!dateString) return 'N/A';
-    try {
-      const date = new Date(dateString);
-      if (isNaN(date.getTime())) return dateString;
-      return date.toLocaleDateString('en-GB');
-    } catch {
-      return dateString;
-    }
+    return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
   // Main data fetch
@@ -241,12 +284,10 @@ function LoanStatement() {
           const instantData = await instantResponse.json();
           console.log('RAW API RESPONSE:', JSON.stringify(instantData, null, 2));
           
-          if (Array.isArray(instantData)) {
+          if (instantData && instantData.data && instantData.data.length > 0) {
             processLoanData(instantData);
-          } else if (instantData && instantData.data && Array.isArray(instantData.data)) {
-            processLoanData(instantData.data);
-          } else if (instantData && instantData.data) {
-            processLoanData([instantData.data]);
+          } else if (Array.isArray(instantData) && instantData.length > 0) {
+            processLoanData({ success: true, data: instantData });
           } else {
             setError('No loan records found');
             setLoanData([]);
@@ -267,7 +308,6 @@ function LoanStatement() {
     
     fetchData();
     
-    // Cleanup function to revoke PDF URLs when component unmounts
     return () => {
       if (pdfUrl) {
         URL.revokeObjectURL(pdfUrl);
@@ -275,6 +315,7 @@ function LoanStatement() {
     };
   }, []);
 
+  // Calculate totals
   const totalLoanAmount = loanData.reduce((sum, loan) => sum + (loan.originalAmount || 0), 0);
   const totalOutstanding = loanData.reduce((sum, loan) => sum + (loan.balance || 0), 0);
 
@@ -334,54 +375,56 @@ function LoanStatement() {
         </div>
 
         <div className="table-section">
-          <table className="report-table">
-            <thead>
-              <tr>
-                <th>Loan No</th>
-                <th>Purpose</th>
-                <th>Start Date</th>
-                <th>End Date</th>
-                <th>Period</th>
-                <th>Principal (KES)</th>
-                <th>Balance (KES)</th>
-                <th>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loanData.length > 0 ? loanData.map((loan, idx) => (
-                <tr key={loan.id || idx}>
-                  <td><strong>{loan.loanNo || 'N/A'}</strong></td>
-                  <td><strong>{loan.purpose || 'N/A'}</strong></td>
-                  <td>{loan.sdate || 'N/A'}</td>
-                  <td>{loan.edate || 'N/A'}</td>
-                  <td className="amount">{loan.period !== undefined ? loan.period : 'N/A'}</td>
-                  <td className="amount"><strong>{formatRawValue(loan.originalAmount)}</strong></td>
-                  <td className="amount"><strong>{formatRawValue(loan.balance)}</strong></td>
-                  <td className="action-cell">
-                    <button 
-                      className="view-stmt-btn"
-                      onClick={() => handleViewStatement(loan)}
-                      style={{ backgroundColor: brandColor }}
-                    >
-                      View Statement
-                    </button>
-                  </td>
+          <div className="table-responsive">
+            <table className="report-table">
+              <thead>
+                <tr>
+                  <th>Loan No</th>
+                  <th>Purpose</th>
+                  <th>Start Date</th>
+                  <th>End Date</th>
+                  <th>Period (Months)</th>
+                  <th>Principal (KES)</th>
+                  <th>Balance (KES)</th>
+                  <th>Action</th>
                 </tr>
-              )) : (
-                <tr><td colSpan="8" style={{ textAlign: 'center', padding: '2rem' }}>No loan records found</td></tr>
+              </thead>
+              <tbody>
+                {loanData.length > 0 ? loanData.map((loan, idx) => (
+                  <tr key={loan.id || idx}>
+                    <td data-label="Loan No"><strong>{loan.loanNo}</strong></td>
+                    <td data-label="Purpose"><strong>{loan.purpose}</strong></td>
+                    <td data-label="Start Date">{loan.sdate}</td>
+                    <td data-label="End Date">{loan.edate}</td>
+                    <td data-label="Period">{loan.period}</td>
+                    <td data-label="Principal" className="amount"><strong>{formatCurrency(loan.originalAmount)}</strong></td>
+                    <td data-label="Balance" className="amount"><strong>{formatCurrency(loan.balance)}</strong></td>
+                    <td data-label="Action" className="action-cell">
+                      <button 
+                        className="view-stmt-btn"
+                        onClick={() => handleViewStatement(loan)}
+                        style={{ backgroundColor: brandColor }}
+                      >
+                        View Statement
+                      </button>
+                    </td>
+                  </tr>
+                )) : (
+                  <tr><td colSpan="8" style={{ textAlign: 'center', padding: '2rem' }}>No loan records found</td></tr>
+                )}
+              </tbody>
+              {loanData.length > 0 && (
+                <tfoot>
+                  <tr className="total-row">
+                    <td colSpan="5"><strong>TOTAL</strong></td>
+                    <td className="amount"><strong>{formatCurrency(totalLoanAmount)}</strong></td>
+                    <td className="amount"><strong>{formatCurrency(totalOutstanding)}</strong></td>
+                    <td></td>
+                  </tr>
+                </tfoot>
               )}
-            </tbody>
-            {loanData.length > 0 && (
-              <tfoot>
-                <tr className="total-row">
-                  <td colSpan="5"><strong>TOTAL</strong></td>
-                  <td className="amount"><strong>{formatRawValue(totalLoanAmount)}</strong></td>
-                  <td className="amount"><strong>{formatRawValue(totalOutstanding)}</strong></td>
-                  <td></td>
-                </tr>
-              </tfoot>
-            )}
-          </table>
+            </table>
+          </div>
         </div>
 
         <div className="report-footer">
@@ -401,7 +444,7 @@ function LoanStatement() {
       {/* Modal for displaying PDF statement */}
       {showModal && (
         <div className="modal-overlay" onClick={handleCloseModal}>
-          <div className="modal-container">
+          <div className="modal-container" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2>Loan Statement - {selectedLoan?.loanNo}</h2>
               <button className="modal-close" onClick={handleCloseModal}>×</button>
@@ -426,14 +469,10 @@ function LoanStatement() {
               )}
             </div>
             <div className="modal-footer">
-              {pdfUrl && (
-                <a
-                  href={pdfUrl}
-                  download={`loan-statement-${selectedLoan?.loanNo}.pdf`}
-                  className="download-stmt-btn"
-                >
+              {pdfBlob && (
+                <button onClick={handleDownloadStatement} className="download-stmt-btn">
                   📄 Download PDF
-                </a>
+                </button>
               )}
               <button className="close-modal-btn" onClick={handleCloseModal}>Close</button>
             </div>
@@ -458,22 +497,38 @@ function LoanStatement() {
         }
         .report-header h1 { font-size: 1.25rem; margin: 0; }
         .contact-info { font-size: 0.7rem; margin-top: 0.5rem; }
+        
+        .table-responsive {
+          width: 100%;
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+        }
+        
         .info-table, .report-table {
           width: 100%;
           border-collapse: collapse;
           margin-bottom: 1rem;
         }
+        
         .info-table td, .report-table td, .report-table th {
           border: 1px solid #000;
           padding: 0.5rem;
         }
+        
         .report-table th {
           background: #f0f0f0;
           font-weight: bold;
+          white-space: nowrap;
         }
+        
+        .report-table td {
+          word-break: break-word;
+        }
+        
         .amount {
           text-align: right;
         }
+        
         .view-stmt-btn {
           background: ${brandColor};
           color: white;
@@ -482,20 +537,29 @@ function LoanStatement() {
           border-radius: 4px;
           cursor: pointer;
           font-size: 0.7rem;
+          white-space: nowrap;
         }
+        
+        .view-stmt-btn:hover {
+          opacity: 0.9;
+        }
+        
         .total-row {
           background: #f0f0f0;
           font-weight: bold;
         }
+        
         .report-footer {
           margin-top: 1rem;
           text-align: center;
           font-size: 0.7rem;
         }
+        
         .download-section {
           text-align: center;
           margin-top: 1rem;
         }
+        
         .download-btn {
           background: ${brandColor};
           color: white;
@@ -504,6 +568,12 @@ function LoanStatement() {
           border-radius: 4px;
           cursor: pointer;
         }
+        
+        .download-btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+        
         .modal-overlay {
           position: fixed;
           top: 0;
@@ -516,6 +586,7 @@ function LoanStatement() {
           justify-content: center;
           z-index: 1000;
         }
+        
         .modal-container {
           background: white;
           border-radius: 8px;
@@ -525,6 +596,7 @@ function LoanStatement() {
           display: flex;
           flex-direction: column;
         }
+        
         .modal-header {
           display: flex;
           justify-content: space-between;
@@ -532,6 +604,12 @@ function LoanStatement() {
           padding: 1rem;
           border-bottom: 2px solid ${brandColor};
         }
+        
+        .modal-header h2 {
+          margin: 0;
+          font-size: 1.2rem;
+        }
+        
         .modal-close {
           background: none;
           border: none;
@@ -539,15 +617,18 @@ function LoanStatement() {
           cursor: pointer;
           font-weight: bold;
         }
+        
         .modal-close:hover {
           color: ${brandColor};
         }
+        
         .modal-body {
           flex: 1;
           overflow: auto;
           padding: 0;
           min-height: 0;
         }
+        
         .modal-footer {
           display: flex;
           justify-content: flex-end;
@@ -555,28 +636,35 @@ function LoanStatement() {
           padding: 1rem;
           border-top: 1px solid #ddd;
         }
+        
         .download-stmt-btn, .close-modal-btn {
           padding: 0.5rem 1rem;
           border: none;
           border-radius: 4px;
           cursor: pointer;
-          text-decoration: none;
-          display: inline-block;
           font-size: 0.9rem;
         }
+        
         .download-stmt-btn {
           background: ${brandColor};
           color: white;
         }
+        
         .close-modal-btn {
           background: #666;
           color: white;
         }
+        
+        .close-modal-btn:hover {
+          background: #555;
+        }
+        
         .pdf-viewer {
           width: 100%;
           height: 100%;
           border: none;
         }
+        
         .modal-loading {
           display: flex;
           flex-direction: column;
@@ -585,6 +673,7 @@ function LoanStatement() {
           height: 100%;
           gap: 1rem;
         }
+        
         .loading-spinner-small {
           width: 40px;
           height: 40px;
@@ -593,6 +682,7 @@ function LoanStatement() {
           border-radius: 50%;
           animation: spin 1s linear infinite;
         }
+        
         .error-container {
           display: flex;
           align-items: center;
@@ -600,6 +690,7 @@ function LoanStatement() {
           height: 100%;
           color: #e53e3e;
         }
+        
         .error-message {
           margin-top: 1rem;
           padding: 0.75rem;
@@ -607,12 +698,76 @@ function LoanStatement() {
           border-left: 4px solid #e53e3e;
           color: #742a2a;
         }
+        
         .action-cell {
           text-align: center;
         }
+        
         @keyframes spin {
           to { transform: rotate(360deg); }
         }
+        
+        @media (max-width: 768px) {
+          .report-container {
+            padding: 1rem;
+          }
+          
+          .report-table thead {
+            display: none;
+          }
+          
+          .report-table,
+          .report-table tbody,
+          .report-table tr,
+          .report-table td {
+            display: block;
+          }
+          
+          .report-table tr {
+            margin-bottom: 1rem;
+            border: 1px solid #000;
+            border-radius: 8px;
+            padding: 0.5rem;
+          }
+          
+          .report-table td {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem;
+            border: none;
+            border-bottom: 1px solid #eee;
+          }
+          
+          .report-table td:last-child {
+            border-bottom: none;
+          }
+          
+          .report-table td::before {
+            content: attr(data-label);
+            font-weight: bold;
+            width: 40%;
+            min-width: 120px;
+          }
+          
+          .report-table td.amount {
+            justify-content: flex-end;
+          }
+          
+          .report-table td.amount::before {
+            text-align: left;
+          }
+          
+          .action-cell {
+            justify-content: center;
+          }
+          
+          .modal-container {
+            width: 95%;
+            height: 85vh;
+          }
+        }
+        
         @media print {
           .download-section, .modal-overlay { display: none; }
         }
