@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import logo from '../log.png';
 
@@ -14,18 +14,34 @@ const ChangePassword = () => {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [countdown, setCountdown] = useState(0);
+
+  // Auto-clear messages
+  useEffect(() => {
+    if (success) {
+      const timer = setTimeout(() => setSuccess(''), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [success]);
 
   const handleChange = (e) => {
     setFormData({
       ...formData,
       [e.target.name]: e.target.value
     });
+    if (error) setError('');
   };
 
-  // Send OTP - CALL PROXY SERVER DIRECTLY
+  // Send OTP
   const handleSendOtp = async () => {
     if (!formData.memberNo.trim()) {
       setError('Please enter Member Number');
+      return;
+    }
+    
+    if (formData.memberNo.trim().length < 3) {
+      setError('Please enter a valid Member Number');
       return;
     }
     
@@ -33,38 +49,51 @@ const ChangePassword = () => {
     setError('');
     
     try {
-      // Use proxy server (relative URL)
-      const response = await fetch('/api/v1/auth/registerOtp', {
+      const response = await fetch('http://localhost:3023/api/v1/auth/registerOtp', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          memberNo: formData.memberNo
+          memberNo: formData.memberNo.trim()
         })
       });
       
       const data = await response.json();
       
-      if (response.status === 201 || response.ok) {
-        setSuccess(data.message || 'OTP sent successfully! Check your phone');
-        setTimeout(() => setSuccess(''), 3000);
+      if (response.ok) {
+        setOtpSent(true);
+        setSuccess(data.message || 'OTP sent successfully! Please check your phone.');
+        
+        // Start countdown for resend
+        setCountdown(60);
+        const timer = setInterval(() => {
+          setCountdown(prev => {
+            if (prev <= 1) {
+              clearInterval(timer);
+              return 0;
+            }
+            return prev - 1;
+          });
+        }, 1000);
+        
       } else {
-        setError(data.message || 'Failed to send OTP');
+        setError(data.message || 'Failed to send OTP. Please try again.');
       }
     } catch (err) {
       console.error('Error sending OTP:', err);
-      setError('Network error. Failed to send OTP');
+      setError('Unable to connect to server. Please check your connection.');
     }
     
     setLoading(false);
   };
 
-  // Change password - CALL PROXY SERVER DIRECTLY
+  // Change password
   const handleChangePassword = async (e) => {
     e.preventDefault();
     setError('');
     
+    // Validation
     if (!formData.memberNo.trim()) {
       setError('Please enter Member Number');
       return;
@@ -75,13 +104,18 @@ const ChangePassword = () => {
       return;
     }
     
+    if (formData.otp.trim().length < 4) {
+      setError('OTP must be at least 4 digits');
+      return;
+    }
+    
     if (!formData.password.trim()) {
       setError('Please enter new password');
       return;
     }
     
     if (formData.password.length < 4) {
-      setError('Password must be at least 4 characters');
+      setError('Password must be at least 4 characters long');
       return;
     }
     
@@ -93,15 +127,14 @@ const ChangePassword = () => {
     setLoading(true);
     
     try {
-      // Use proxy server (relative URL)
-      const response = await fetch('/api/v1/auth/change-password', {
+      const response = await fetch('http://localhost:3023/api/v1/auth/change-password', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          memberNo: formData.memberNo,
-          otp: formData.otp,
+          memberNo: formData.memberNo.trim(),
+          otp: formData.otp.trim(),
           newPassword: formData.password,
           confirmPassword: formData.confirmPassword
         })
@@ -111,300 +144,368 @@ const ChangePassword = () => {
       
       if (response.ok) {
         setSuccess(data.message || 'Password changed successfully! Redirecting to login...');
+        
+        // Clear form
+        setFormData({
+          memberNo: '',
+          otp: '',
+          password: '',
+          confirmPassword: ''
+        });
+        
+        // Redirect to login after 2 seconds
         setTimeout(() => {
           navigate('/login');
         }, 2000);
       } else {
-        setError(data.message || 'Failed to change password');
+        setError(data.message || 'Failed to change password. Please check your OTP and try again.');
       }
     } catch (err) {
       console.error('Error changing password:', err);
-      setError('Network error. Failed to change password');
+      setError('Unable to connect to server. Please try again.');
     }
     
     setLoading(false);
   };
 
   return (
-    <div className="login-container">
-      <div className="login-card">
-        <div className="login-logo-section">
-          <img src={logo} alt="Sacco Logo" className="login-logo-image" />
+    <div style={styles.container}>
+      <style>{styles.keyframes}</style>
+      <div style={styles.card}>
+        <div style={styles.logoSection}>
+          <img src={logo} alt="Metro Sacco Logo" style={styles.logoImage} />
         </div>
         
-        <div className="login-header">
-          <h2>Change Password</h2>
-          <p>Update your account password</p>
+        <div style={styles.header}>
+          <h2 style={styles.headerH2}>Change Password</h2>
+          <p style={styles.headerP}>Update your account password</p>
         </div>
         
-        <div className="login-body">
+        <div style={styles.body}>
           {error && (
-            <div style={{ 
-              background: 'rgba(231, 76, 60, 0.08)', 
-              borderLeft: '3px solid #e74c3c', 
-              color: '#c0392b', 
-              padding: '0.75rem', 
-              borderRadius: '8px', 
-              marginBottom: '1rem', 
-              fontSize: '0.75rem' 
-            }}>
-              {error}
+            <div style={styles.errorMessage}>
+              <span>⚠️</span> {error}
             </div>
           )}
           
           {success && (
-            <div style={{ 
-              background: 'rgba(72, 187, 120, 0.08)', 
-              borderLeft: '3px solid #48bb78', 
-              color: '#276749', 
-              padding: '0.75rem', 
-              borderRadius: '8px', 
-              marginBottom: '1rem', 
-              fontSize: '0.75rem' 
-            }}>
-              {success}
+            <div style={styles.successMessage}>
+              <span>✓</span> {success}
             </div>
           )}
           
           <form onSubmit={handleChangePassword}>
-            <div className="form-group">
-              <label className="form-label">Member No</label>
+            <div style={styles.formGroup}>
+              <label style={styles.formLabel}>
+                Member Number <span style={{color: '#e74c3c'}}>*</span>
+              </label>
               <input
                 type="text"
                 name="memberNo"
-                className="form-control"
+                style={styles.formInput}
                 value={formData.memberNo}
                 onChange={handleChange}
                 placeholder="Enter your member number"
+                disabled={loading}
+                autoFocus
               />
             </div>
 
-            <button 
-              type="button"
-              onClick={handleSendOtp}
-              className="send-otp-btn"
-              disabled={loading}
-            >
-              {loading ? 'Sending...' : 'Send Otp'}
-            </button>
-
-            <div className="form-group">
-              <label className="form-label">OTP</label>
+            {/* OTP Field - Now below Member Number */}
+            <div style={styles.formGroup}>
+              <label style={styles.formLabel}>
+                OTP Code <span style={{color: '#e74c3c'}}>*</span>
+              </label>
               <input
                 type="text"
                 name="otp"
-                className="form-control"
+                style={styles.formInput}
                 value={formData.otp}
                 onChange={handleChange}
                 placeholder="Enter OTP"
+                disabled={loading}
               />
             </div>
 
-            <div className="form-group">
-              <label className="form-label">Password</label>
+            {/* Send OTP Button - Below OTP field */}
+            <button 
+              type="button"
+              onClick={handleSendOtp}
+              style={{
+                ...styles.otpButton,
+                ...(otpSent ? styles.otpButtonSent : {}),
+                ...((loading || countdown > 0) ? styles.otpButtonDisabled : {})
+              }}
+              disabled={loading || countdown > 0}
+              onMouseEnter={(e) => {
+                if (!loading && countdown === 0) {
+                  e.target.style.transform = 'translateY(-1px)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                e.target.style.transform = 'translateY(0)';
+              }}
+            >
+              {loading ? 'Sending...' : countdown > 0 ? `Resend in ${countdown}s` : (otpSent ? 'Resend OTP' : 'Send OTP')}
+            </button>
+
+            <div style={styles.formGroup}>
+              <label style={styles.formLabel}>
+                New Password <span style={{color: '#e74c3c'}}>*</span>
+              </label>
               <input
                 type="password"
                 name="password"
-                className="form-control"
+                style={styles.formInput}
                 value={formData.password}
                 onChange={handleChange}
-                placeholder="New password (min 4 characters)"
+                placeholder="Minimum 4 characters"
+                disabled={loading}
               />
+              <small style={styles.inputHint}>Password must be at least 4 characters long</small>
             </div>
 
-            <div className="form-group">
-              <label className="form-label">Password Confirmation</label>
+            <div style={styles.formGroup}>
+              <label style={styles.formLabel}>
+                Confirm Password <span style={{color: '#e74c3c'}}>*</span>
+              </label>
               <input
                 type="password"
                 name="confirmPassword"
-                className="form-control"
+                style={styles.formInput}
                 value={formData.confirmPassword}
                 onChange={handleChange}
-                placeholder="Confirm new password"
+                placeholder="Re-enter new password"
+                disabled={loading}
               />
             </div>
 
             <button 
               type="submit" 
-              className="login-btn" 
+              style={{
+                ...styles.submitButton,
+                ...(loading ? styles.submitButtonDisabled : {})
+              }}
               disabled={loading}
+              onMouseEnter={(e) => {
+                if (!loading) {
+                  e.target.style.transform = 'translateY(-1px)';
+                  e.target.style.boxShadow = '0 4px 12px rgba(0, 163, 181, 0.3)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                e.target.style.transform = 'translateY(0)';
+                e.target.style.boxShadow = 'none';
+              }}
             >
-              {loading ? 'Processing...' : 'Change Password'}
+              {loading ? (
+                <>
+                  <span style={styles.spinner}></span>
+                  Processing...
+                </>
+              ) : 'Change Password'}
             </button>
           </form>
           
-          <div className="login-links">
-            <span className="back-link" onClick={() => navigate('/login')}>← Back to Login</span>
+          <div style={styles.links}>
+            <button 
+              type="button"
+              style={styles.backLink}
+              onClick={() => navigate('/login')}
+              disabled={loading}
+              onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
+              onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
+            >
+              ← Back to Login
+            </button>
           </div>
         </div>
       </div>
-
-      <style>{`
-        .login-container {
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          min-height: 100vh;
-          background: #00a3b5;
-          padding: 1rem;
-        }
-
-        .login-card {
-          background: white;
-          border-radius: 16px;
-          box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
-          width: 100%;
-          max-width: 420px;
-          overflow: hidden;
-        }
-
-        .login-logo-section {
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          padding: 2rem 2rem 1rem 2rem;
-          background: white;
-        }
-
-        .login-logo-image {
-          max-width: 120px;
-          height: auto;
-          object-fit: contain;
-        }
-
-        .login-header {
-          text-align: center;
-          padding: 1rem 2rem;
-          background: #00a3b5;
-        }
-
-        .login-header h2 {
-          font-size: 1.5rem;
-          color: white;
-          margin: 0 0 0.25rem 0;
-          font-weight: 600;
-        }
-
-        .login-header p {
-          font-size: 0.85rem;
-          color: white;
-          margin: 0;
-          opacity: 0.9;
-        }
-
-        .login-body {
-          padding: 2rem;
-        }
-
-        .form-group {
-          margin-bottom: 1.25rem;
-        }
-
-        .form-label {
-          display: block;
-          font-size: 0.75rem;
-          font-weight: 600;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          color: #4a5568;
-          margin-bottom: 0.5rem;
-        }
-
-        .form-control {
-          width: 100%;
-          padding: 0.75rem;
-          border: 1px solid #e2e8f0;
-          border-radius: 8px;
-          font-size: 0.875rem;
-          transition: all 0.2s;
-          box-sizing: border-box;
-        }
-
-        .form-control:focus {
-          outline: none;
-          border-color: #00a3b5;
-          box-shadow: 0 0 0 3px rgba(0, 163, 181, 0.1);
-        }
-
-        .send-otp-btn {
-          width: 100%;
-          padding: 0.75rem;
-          background: #48bb78;
-          color: white;
-          border: none;
-          border-radius: 8px;
-          font-size: 0.875rem;
-          font-weight: 600;
-          cursor: pointer;
-          transition: background 0.2s;
-          margin-bottom: 1.5rem;
-        }
-
-        .send-otp-btn:hover:not(:disabled) {
-          background: #38a169;
-        }
-
-        .login-btn {
-          width: 100%;
-          padding: 0.75rem;
-          background: #00a3b5;
-          color: white;
-          border: none;
-          border-radius: 8px;
-          font-size: 0.875rem;
-          font-weight: 600;
-          cursor: pointer;
-          transition: background 0.2s;
-        }
-
-        .login-btn:hover:not(:disabled) {
-          background: #008a9a;
-        }
-
-        .login-btn:disabled, .send-otp-btn:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-        }
-
-        .login-links {
-          display: flex;
-          justify-content: center;
-          margin-top: 1.5rem;
-          padding-top: 1rem;
-          border-top: 1px solid #e2e8f0;
-        }
-        
-        .back-link {
-          color: #00a3b5;
-          font-size: 0.8rem;
-          cursor: pointer;
-          font-weight: 500;
-        }
-        
-        .back-link:hover {
-          text-decoration: underline;
-        }
-
-        @media (max-width: 480px) {
-          .login-body {
-            padding: 1.5rem;
-          }
-          
-          .login-header {
-            padding: 1rem;
-          }
-          
-          .login-logo-section {
-            padding: 1.5rem 1.5rem 0.5rem 1.5rem;
-          }
-          
-          .login-logo-image {
-            max-width: 100px;
-          }
-        }
-      `}</style>
     </div>
   );
+};
+
+const styles = {
+  container: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    minHeight: '100vh',
+    background: 'linear-gradient(135deg, #00a3b5 0%, #008a9a 100%)',
+    padding: '1rem',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+  },
+  card: {
+    background: 'white',
+    borderRadius: '20px',
+    boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+    width: '100%',
+    maxWidth: '450px',
+    overflow: 'hidden',
+    animation: 'fadeInUp 0.5s ease-out',
+  },
+  logoSection: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: '2rem 2rem 1rem 2rem',
+    background: 'white',
+  },
+  logoImage: {
+    maxWidth: '120px',
+    height: 'auto',
+    objectFit: 'contain',
+  },
+  header: {
+    textAlign: 'center',
+    padding: '1rem 2rem',
+    background: 'linear-gradient(135deg, #00a3b5 0%, #008a9a 100%)',
+  },
+  headerH2: {
+    fontSize: '1.5rem',
+    color: 'white',
+    margin: '0 0 0.25rem 0',
+    fontWeight: 600,
+  },
+  headerP: {
+    fontSize: '0.85rem',
+    color: 'white',
+    margin: 0,
+    opacity: 0.9,
+  },
+  body: {
+    padding: '2rem',
+  },
+  errorMessage: {
+    background: 'rgba(231, 76, 60, 0.08)',
+    borderLeft: '3px solid #e74c3c',
+    color: '#c0392b',
+    padding: '0.75rem',
+    borderRadius: '8px',
+    marginBottom: '1rem',
+    fontSize: '0.875rem',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+  },
+  successMessage: {
+    background: 'rgba(72, 187, 120, 0.08)',
+    borderLeft: '3px solid #48bb78',
+    color: '#276749',
+    padding: '0.75rem',
+    borderRadius: '8px',
+    marginBottom: '1rem',
+    fontSize: '0.875rem',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+  },
+  formGroup: {
+    marginBottom: '1.25rem',
+  },
+  formLabel: {
+    display: 'block',
+    fontSize: '0.75rem',
+    fontWeight: 600,
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+    color: '#4a5568',
+    marginBottom: '0.5rem',
+  },
+  formInput: {
+    width: '100%',
+    padding: '0.75rem',
+    border: '2px solid #e2e8f0',
+    borderRadius: '10px',
+    fontSize: '0.875rem',
+    transition: 'all 0.2s',
+    boxSizing: 'border-box',
+  },
+  inputHint: {
+    display: 'block',
+    fontSize: '0.7rem',
+    color: '#718096',
+    marginTop: '0.25rem',
+  },
+  otpButton: {
+    width: '100%',
+    padding: '0.75rem',
+    background: '#48bb78',
+    color: 'white',
+    border: 'none',
+    borderRadius: '10px',
+    fontSize: '0.875rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+    marginBottom: '1.25rem',
+  },
+  otpButtonSent: {
+    background: '#ed8936',
+  },
+  otpButtonDisabled: {
+    opacity: 0.6,
+    cursor: 'not-allowed',
+  },
+  submitButton: {
+    width: '100%',
+    padding: '0.75rem',
+    background: 'linear-gradient(135deg, #00a3b5 0%, #008a9a 100%)',
+    color: 'white',
+    border: 'none',
+    borderRadius: '10px',
+    fontSize: '0.875rem',
+    fontWeight: 600,
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+    marginTop: '1rem',
+  },
+  submitButtonDisabled: {
+    opacity: 0.6,
+    cursor: 'not-allowed',
+  },
+  links: {
+    display: 'flex',
+    justifyContent: 'center',
+    marginTop: '1.5rem',
+    paddingTop: '1rem',
+    borderTop: '1px solid #e2e8f0',
+  },
+  backLink: {
+    background: 'none',
+    border: 'none',
+    color: '#00a3b5',
+    fontSize: '0.875rem',
+    cursor: 'pointer',
+    fontWeight: 500,
+    transition: 'all 0.2s',
+  },
+  spinner: {
+    display: 'inline-block',
+    width: '14px',
+    height: '14px',
+    border: '2px solid rgba(255, 255, 255, 0.3)',
+    borderRadius: '50%',
+    borderTopColor: 'white',
+    animation: 'spin 0.6s linear infinite',
+    marginRight: '0.5rem',
+  },
+  keyframes: `
+    @keyframes fadeInUp {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  `,
 };
 
 export default ChangePassword;

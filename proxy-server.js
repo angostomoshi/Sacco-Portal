@@ -3,20 +3,31 @@ const cors = require('cors');
 const axios = require('axios');
 const { Pool } = require('pg');
 const PDFDocument = require('pdfkit');
-const bcrypt = require('bcrypt'); // Add this for password hashing
 
 const app = express();
-const port = process.env.PORT || 3023; // Use environment variable for port
+const port = 3023;
 
 // CORS configuration
 app.use(cors({
-  origin: true,
+  origin: 'http://localhost:3000',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Cookie', 'X-Requested-With']
 }));
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ============================================
+// TEST ENDPOINT
+// ============================================
+app.get('/api/v1/test', (req, res) => {
+  res.json({ 
+    message: 'Proxy server is working!', 
+    time: new Date().toISOString(),
+    status: 'running'
+  });
+});
 
 // Disable caching
 app.use('/api/v1', (req, res, next) => {
@@ -38,693 +49,427 @@ app.use((req, res, next) => {
 
 // Database connection
 const dbPool = new Pool({
-  host: process.env.DB_HOST || '192.168.4.10',
-  port: process.env.DB_PORT || 5432,
-  database: process.env.DB_NAME || 'sacco',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'legacy#007',
+  host: '192.168.4.10',
+  port: 5432,
+  database: 'sacco',
+  user: 'postgres',
+  password: 'legacy#007',
   ssl: false,
-  connectionTimeoutMillis: 10000,
+  connectionTimeoutMillis: 30000,
+  idleTimeoutMillis: 30000,
+  keepAlive: true,
 });
 
-dbPool.connect((err) => {
+// Test database connection
+dbPool.connect((err, client, release) => {
   if (err) {
     console.error('❌ Database connection failed:', err.message);
+    console.error('   Please check VPN connection to 192.168.4.10');
   } else {
     console.log('✅ Database connected successfully');
+    release();
   }
 });
 
-const LIVE_API_BASE = 'http://192.168.4.6:3023/api/v1';
-const LIVE_API_BASE = process.env.LIVE_API_BASE || 'https://memberportal.metro-sacco.com/api/v1';
+const LIVE_API_BASE = 'https://memberportal.metro-sacco.com/api/v1';
 
 // ============================================
-// LOCAL ENDPOINTS (including change-password)
+// DEBUG: Clear all OTPs for a member
 // ============================================
-const LOCAL_ENDPOINTS = [
-  '/loan-statement-direct', 
-  '/withdrawable-statement-direct',
-  '/loan/apply',
-  '/instant/',
-  '/auth/change-password'  // ← THIS IS THE KEY FIX
-];
+app.delete('/api/v1/debug/clear-otp/:memberNo', async (req, res) => {
+  const { memberNo } = req.params;
+  
+  try {
+    const result = await dbPool.query(
+      `DELETE FROM integration.user_name_otp WHERE "login name" = $1 RETURNING *`,
+      [memberNo]
+    );
+    
+    res.json({
+      message: `Cleared ${result.rowCount} OTP(s) for ${memberNo}`,
+      deleted_count: result.rowCount
+    });
+  } catch (error) {
+    console.error('Clear OTP error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // ============================================
-// FORWARDING MIDDLEWARE
+// DEBUG: Check OTPs for a member
 // ============================================
-app.use('/api/v1', async (req, res, next) => {
-  console.log(`\n🔍 Checking path: ${req.path}`);
+app.get('/api/v1/debug/check-otp/:memberNo', async (req, res) => {
+  const { memberNo } = req.params;
   
-  // Check if this is a local endpoint
-  const isLocalEndpoint = LOCAL_ENDPOINTS.some(endpoint => {
-    if (endpoint === '/instant/') {
-      return req.path.startsWith('/instant/');
-    }
-    return req.path === endpoint;
-  });
+  try {
+    const result = await dbPool.query(
+      `SELECT "login name", passkey, "mobile no", "date", id, "created at"
+       FROM integration.user_name_otp 
+       WHERE "login name" = $1 
+       ORDER BY "created at" DESC, "date" DESC`,
+      [memberNo]
+    );
+    
+    res.json({
+      memberNo: memberNo,
+      otps_found: result.rows,
+      count: result.rows.length,
+      message: "Use the latest OTP from this list"
+    });
+  } catch (error) {
+    console.error('Check OTP error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// LOCAL ENDPOINT: REGISTER/SEND OTP
+// ============================================
+app.post('/api/v1/registerOtp', async (req, res) => {
+  const { memberNo } = req.body;
   
-  console.log(`   Is local endpoint? ${isLocalEndpoint}`);
+  console.log(`\n📱 [LOCAL] OTP request for: ${memberNo}`);
   
-  if (isLocalEndpoint) {
-    console.log(`   ✅ Handling locally`);
-    return next();
+  if (!memberNo || memberNo.trim() === "") {
+    return res.status(400).json({ 
+      success: false, 
+      message: "Enter username" 
+    });
   }
   
-  // Forward to live server
-  console.log(`   🔄 FORWARDING to live server: ${req.path}`);
+  try {
+    // Check if member exists and get phone number
+    const memberCheck = await dbPool.query(
+      `SELECT acc_no, holders_name, tel1 FROM pb_share_register WHERE acc_no = $1`,
+      [memberNo]
+    );
+    
+    if (memberCheck.rows.length === 0) {
+      console.log(`   ❌ Member not found: ${memberNo}`);
+      return res.status(404).json({ 
+        success: false, 
+        message: "Member not found" 
+      });
+    }
+    
+    const member = memberCheck.rows[0];
+    const phoneNumber = member.tel1;
+    
+    console.log(`   ✅ Member found: ${member.holders_name}`);
+    console.log(`   📞 Phone: ${phoneNumber}`);
+    
+    // Generate a random 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000);
+    console.log(`   🔑 Generated OTP: ${otp}`);
+    
+    // First, delete any existing OTP for this user
+    await dbPool.query(
+      `DELETE FROM integration.user_name_otp WHERE "login name" = $1`,
+      [memberNo]
+    );
+    console.log(`   🗑️  Cleared existing OTPs`);
+    
+    // Insert new OTP with exact column names (using double quotes for spaces)
+    const insertResult = await dbPool.query(
+      `INSERT INTO integration.user_name_otp ("login name", passkey, "mobile no", "date", "created at") 
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) 
+       RETURNING id`,
+      [memberNo, otp, phoneNumber]
+    );
+    
+    if (insertResult.rows.length > 0) {
+      console.log(`   📝 Inserted new OTP successfully (ID: ${insertResult.rows[0].id})`);
+    } else {
+      console.log(`   ❌ Failed to insert OTP`);
+      return res.status(500).json({ 
+        success: false, 
+        message: "Failed to save OTP. Please try again." 
+      });
+    }
+    
+    console.log(`   💡 OTP for ${memberNo}: ${otp}`);
+    
+    return res.status(200).json({
+      success: true,
+      message: `OTP sent successfully to ${phoneNumber || 'your phone'}`,
+      otp: otp // Remove this line in production
+    });
+    
+  } catch (error) {
+    console.error(`   ❌ Error:`, error.message);
+    console.error(`   Stack:`, error.stack);
+    return res.status(500).json({ 
+      success: false, 
+      message: "Failed to generate OTP. Please try again.",
+      details: error.message
+    });
+  }
+});
+
+// ============================================
+// CHANGE PASSWORD ENDPOINT - Using exact column names with spaces
+// ============================================
+app.post('/api/v1/auth/change-password', async (req, res) => {
+  const { memberNo, otp, newPassword, confirmPassword } = req.body;
+  
+  console.log(`\n🔐 Password change request for: ${memberNo}`);
+  console.log(`   OTP provided: ${otp}`);
+  console.log(`   New password length: ${newPassword ? newPassword.length : 0}`);
+  
+  // Validation
+  if (!memberNo || memberNo.trim() === "") {
+    console.log(`   ❌ Username missing`);
+    return res.status(400).json({ 
+      success: false, 
+      message: "Enter username" 
+    });
+  }
+  
+  if (!otp || otp.trim() === "") {
+    console.log(`   ❌ OTP missing`);
+    return res.status(400).json({ 
+      success: false, 
+      message: "Enter OTP" 
+    });
+  }
+  
+  if (!newPassword || newPassword.trim() === "") {
+    console.log(`   ❌ Password missing`);
+    return res.status(400).json({ 
+      success: false, 
+      message: "Enter New Password" 
+    });
+  }
+  
+  if (newPassword !== confirmPassword) {
+    console.log(`   ❌ Passwords do not match`);
+    return res.status(400).json({ 
+      success: false, 
+      message: "New Password Does not Match - ReType Please!" 
+    });
+  }
+  
+  if (newPassword.length < 4) {
+    console.log(`   ❌ Password too short`);
+    return res.status(400).json({ 
+      success: false, 
+      message: "Password must be at least 4 characters" 
+    });
+  }
+  
+  let client;
+  try {
+    client = await dbPool.connect();
+    
+    // Step 1: Get the latest OTP - Using exact column names with quotes
+    console.log(`   🔍 Verifying OTP...`);
+    const otpResult = await client.query(
+      `SELECT id, "login name", passkey, "date", "created at"
+       FROM integration.user_name_otp 
+       WHERE "login name" = $1 
+       ORDER BY "created at" DESC, "date" DESC
+       LIMIT 1`,
+      [memberNo]
+    );
+    
+    console.log(`   📝 Query executed, rows returned: ${otpResult.rows.length}`);
+    
+    if (otpResult.rows.length === 0) {
+      console.log(`   ❌ No OTP found for user`);
+      return res.status(404).json({ 
+        success: false, 
+        message: "No OTP found. Please request OTP first." 
+      });
+    }
+    
+    const storedRecord = otpResult.rows[0];
+    const storedOtp = storedRecord.passkey;
+    const providedOtp = parseInt(otp);
+    
+    console.log(`   📝 Stored OTP record ID: ${storedRecord.id}`);
+    console.log(`   📝 Stored OTP: ${storedOtp}`);
+    console.log(`   📝 Provided OTP: ${providedOtp}`);
+    console.log(`   🕐 Created at: ${storedRecord['created at']}`);
+    console.log(`   📅 Date: ${storedRecord.date}`);
+    
+    if (storedOtp !== providedOtp) {
+      console.log(`   ❌ Invalid OTP - Expected: ${storedOtp}, Got: ${providedOtp}`);
+      return res.status(401).json({ 
+        success: false, 
+        message: "Enter Correct Passkey" 
+      });
+    }
+    
+    console.log(`   ✅ OTP verified successfully`);
+    
+    // Step 2: Find the correct password column in pb_share_register
+    const passwordColumnCheck = await client.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'pb_share_register'
+      AND (column_name ILIKE '%pass%' OR column_name ILIKE '%pwd%' OR column_name = 'pin')
+    `);
+    
+    let passwordColumn = null;
+    
+    if (passwordColumnCheck.rows.length > 0) {
+      passwordColumn = passwordColumnCheck.rows[0].column_name;
+      console.log(`   🔧 Found password column: ${passwordColumn}`);
+    } else {
+      // Check all columns as fallback
+      const allColumns = await client.query(`
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'pb_share_register'
+      `);
+      
+      console.log(`   📋 Available columns:`, allColumns.rows.map(r => r.column_name));
+      
+      // Try common password column names
+      const possibleColumns = ['pass', 'password', 'pwd', 'pin', 'security_code', 'member_password'];
+      for (const col of possibleColumns) {
+        const exists = allColumns.rows.some(r => r.column_name === col);
+        if (exists) {
+          passwordColumn = col;
+          console.log(`   🔧 Using column: ${passwordColumn}`);
+          break;
+        }
+      }
+    }
+    
+    if (!passwordColumn) {
+      console.log(`   ❌ No password column found`);
+      return res.status(500).json({ 
+        success: false, 
+        message: "Database configuration error. Please contact support." 
+      });
+    }
+    
+    // Step 3: Check if member exists
+    const memberCheck = await client.query(
+      `SELECT acc_no, holders_name FROM pb_share_register WHERE acc_no = $1`,
+      [memberNo]
+    );
+    
+    if (memberCheck.rows.length === 0) {
+      console.log(`   ❌ Member not found`);
+      return res.status(404).json({ 
+        success: false, 
+        message: "Member account not found." 
+      });
+    }
+    
+    console.log(`   ✅ Member found: ${memberCheck.rows[0].holders_name}`);
+    
+    // Step 4: Update the password
+    const updateQuery = `UPDATE pb_share_register SET "${passwordColumn}" = $1 WHERE acc_no = $2`;
+    console.log(`   📝 Executing: ${updateQuery}`);
+    
+    const updateResult = await client.query(updateQuery, [newPassword, memberNo]);
+    
+    console.log(`   📊 Rows affected: ${updateResult.rowCount}`);
+    
+    if (updateResult.rowCount > 0) {
+      console.log(`   ✅ Password changed successfully!`);
+      
+      // Delete the used OTP
+      await client.query(
+        `DELETE FROM integration.user_name_otp WHERE id = $1`,
+        [storedRecord.id]
+      );
+      console.log(`   🗑️  Deleted used OTP`);
+      
+      return res.status(200).json({
+        success: true,
+        message: "Password Changed Successfully"
+      });
+    } else {
+      console.log(`   ⚠️ No rows updated`);
+      return res.status(500).json({ 
+        success: false, 
+        message: "Error Resetting the Password. Please try again." 
+      });
+    }
+    
+  } catch (error) {
+    console.error(`   ❌ Error:`, error.message);
+    console.error(`   Stack:`, error.stack);
+    
+    return res.status(500).json({ 
+      success: false, 
+      message: "Error Resetting the Password. Please try again.",
+      details: error.message
+    });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+// Forward middleware for other endpoints
+app.use('/api/v1', async (req, res, next) => {
+  const LOCAL_ENDPOINTS = ['/auth/change-password', '/registerOtp', '/loan-statement-direct', '/withdrawable-statement-direct'];
+  const isLocalEndpoint = LOCAL_ENDPOINTS.some(endpoint => req.path === endpoint);
+  
+  if (isLocalEndpoint) {
+    return next();
+  }
   
   try {
     const liveUrl = `${LIVE_API_BASE}${req.path}`;
     console.log(`   🔄 FORWARDING to: ${liveUrl}`);
-    
-    // Build forwarded headers - include cookies and all original headers
-    const forwardHeaders = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    };
-    
-    // Forward Authorization token if present
-    if (req.headers.authorization) {
-      forwardHeaders['Authorization'] = req.headers.authorization;
-    }
-    
-    // Forward cookies (important for Spring Security CSRF/session)
-    if (req.headers.cookie) {
-      forwardHeaders['Cookie'] = req.headers.cookie;
-    }
-    
-    // Forward X-XSRF-TOKEN if present (Spring CSRF token)
-    if (req.headers['x-xsrf-token']) {
-      forwardHeaders['X-XSRF-TOKEN'] = req.headers['x-xsrf-token'];
-    }
     
     const response = await axios({
       method: req.method,
       url: liveUrl,
       data: req.body,
       params: req.query,
-      headers: forwardHeaders,
-      timeout: 30000,
-      withCredentials: true
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...(req.headers.authorization && { 'Authorization': req.headers.authorization })
+      },
+      timeout: 30000
     });
     
     console.log(`   ✅ Response: ${response.status}`);
-    
-    // Forward any Set-Cookie headers from the live server back to the client
-    if (response.headers['set-cookie']) {
-      res.setHeader('Set-Cookie', response.headers['set-cookie']);
-    }
-    
     res.status(response.status).json(response.data);
   } catch (error) {
     console.error(`   ❌ Forwarding error:`, error.message);
     if (error.response) {
-      console.log(`   📝 Live server responded with: ${error.response.status}`);
-      console.log(`   📝 Response body:`, JSON.stringify(error.response.data));
       res.status(error.response.status).json(error.response.data);
     } else {
-      return res.status(500).json({ error: 'Failed to connect to live server', message: error.message });
+      res.status(500).json({ error: 'Failed to connect to live server', message: error.message });
     }
   }
 });
 
 // ============================================
-// LOCAL ENDPOINT: CHANGE PASSWORD
+// LOCAL ENDPOINT: LOAN STATEMENT PDF (Keep your existing code)
 // ============================================
-app.post('/api/v1/auth/change-password', async (req, res) => {
-  console.log('\n🔐 [LOCAL] Password change request:');
-  console.log('   Body:', req.body);
-  
-  const { memberNo, otp, newPassword, confirmPassword } = req.body;
-  
-  // Validate input
-  if (!memberNo || !otp || !newPassword) {
-    return res.status(400).json({ 
-      status: 1, 
-      message: 'Missing required fields: memberNo, otp, or newPassword' 
-    });
-  }
-  
-  if (newPassword !== confirmPassword) {
-    return res.status(400).json({ 
-      status: 1, 
-      message: 'Passwords do not match' 
-    });
-  }
-  
-  try {
-    // First, verify the OTP (you need to implement OTP storage/verification)
-    // For now, we'll skip OTP verification or you can implement it
-    
-    // Hash the new password
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
-    
-    // Update password in your local database
-    // Note: Adjust the table name and column names based on your actual database schema
-    const updateResult = await dbPool.query(
-      `UPDATE pb_share_register 
-       SET password = $1, 
-           updated_at = CURRENT_TIMESTAMP 
-       WHERE acc_no = $2 
-       RETURNING acc_no, holders_name`,
-      [hashedPassword, memberNo]
-    );
-    
-    if (updateResult.rows.length === 0) {
-      return res.status(404).json({ 
-        status: 1, 
-        message: 'Member not found' 
-      });
-    }
-    
-    console.log(`   ✅ Password updated successfully for member: ${memberNo}`);
-    
-    // Return success response (matching the expected format)
-    res.status(200).json({
-      status: 0,  // 0 typically means success in your API
-      message: 'Password changed successfully',
-      memberNo: memberNo,
-      token: null // Or generate a new token if needed
-    });
-    
-  } catch (error) {
-    console.error('   ❌ Error updating password:', error.message);
-    res.status(500).json({ 
-      status: 1, 
-      message: 'Failed to change password: ' + error.message 
-    });
-  }
-});
+// ... (your existing loan-statement-direct endpoint)
 
 // ============================================
-// LOCAL ENDPOINT: GET INSTANT LOANS
+// LOCAL ENDPOINT: WITHDRAWABLE DEPOSIT STATEMENT PDF (Keep your existing code)
 // ============================================
-app.get('/api/v1/instant/:memberNo', async (req, res) => {
-  const { memberNo } = req.params;
-  console.log(`\n⚡ [LOCAL] Fetching instant loans for: ${memberNo}`);
-  
-  try {
-    const columnsCheck = await dbPool.query(
-      `SELECT column_name 
-       FROM information_schema.columns 
-       WHERE table_name = 'pb_saccoloan' 
-       AND column_name IN ('status', 'loan_status')
-       ORDER BY column_name`
-    );
-    
-    const availableColumns = columnsCheck.rows.map(row => row.column_name);
-    
-    let query = `
-      SELECT 
-        loan_no as "loanNo",
-        lpurpose as "loanPurpose", 
-        cdate as "startDate",
-        edate as "endDate",
-        period,
-        amount,
-        amount as "outStanding"
-    `;
-    
-    if (availableColumns.includes('status')) {
-      query += `, status`;
-    } else if (availableColumns.includes('loan_status')) {
-      query += `, loan_status as "status"`;
-    }
-    
-    query += ` FROM pb_saccoloan WHERE mem_no = $1 ORDER BY cdate DESC`;
-    
-    const loans = await dbPool.query(query, [memberNo]);
-    
-    res.status(200).json({
-      success: true,
-      data: loans.rows,
-      source: "local",
-      count: loans.rows.length
-    });
-  } catch (dbError) {
-    console.error(`   ❌ Database error:`, dbError.message);
-    res.status(500).json({ 
-      success: false, 
-      message: "Failed to fetch instant loans",
-      error: dbError.message 
-    });
-  }
-});
-
-// ============================================
-// LOCAL ENDPOINT: SUBMIT LOAN APPLICATION
-// ============================================
-app.post('/api/v1/loan/apply', async (req, res) => {
-  console.log('\n📝 New Loan Application Received:');
-  console.log(JSON.stringify(req.body, null, 2));
-  
-  const {
-    memberNo,
-    memberName,
-    loanType,
-    loanAmount,
-    periodMonths,
-    interestRate,
-    monthlyDeduction,
-    totalAmount,
-    applicationDate
-  } = req.body;
-  
-  try {
-    const memberCheck = await dbPool.query(
-      `SELECT acc_no, holders_name, id_no, email_add, postal_code, tel1 
-       FROM pb_share_register WHERE acc_no = $1`,
-      [memberNo]
-    );
-    
-    if (memberCheck.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Member not found' });
-    }
-    
-    const member = memberCheck.rows[0];
-    const year = new Date().getFullYear();
-    const loanNoResult = await dbPool.query(
-      `SELECT COALESCE(MAX(CAST(SPLIT_PART(loan_no, '/', 1) AS INTEGER)), 0) + 1 as loan_seq 
-       FROM pb_saccoloan WHERE loan_no LIKE '%/${year}'`
-    );
-    const loanSeq = loanNoResult.rows[0].loan_seq;
-    const loanNumber = `${loanSeq}/${year}`;
-    
-    const startDate = new Date(applicationDate || new Date());
-    const endDate = new Date(startDate);
-    endDate.setMonth(endDate.getMonth() + parseInt(periodMonths));
-    
-    const formattedStartDate = startDate.toISOString().split('T')[0];
-    const formattedEndDate = endDate.toISOString().split('T')[0];
-    
-    const columnsCheck = await dbPool.query(
-      `SELECT column_name 
-       FROM information_schema.columns 
-       WHERE table_name = 'pb_saccoloan'`
-    );
-    
-    const existingColumns = columnsCheck.rows.map(row => row.column_name);
-    
-    const insertFields = [
-      'mem_no', 'member_name', 'loan_no', 'pno', 'wstation', 'employer', 
-      'poastal_code', 'categ', 'email_address', 'security1', 'id_no', 
-      'lpurpose', 'pymt_terms', 'cdate', 'edate', 'amount', 'period', 
-      'repayment', 'interest', 'premium', 'user_name', 'input_date', 'total'
-    ];
-    
-    const insertValues = [
-      memberNo, memberName, loanNumber, '', 'METROPOLITAN', 'Metropolitan',
-      member.postal_code || '', 'METROPOLITAN STAFF', member.email_add || '', 
-      'Shares', member.id_no || '', loanType, 'Monthly', formattedStartDate,
-      formattedEndDate, parseFloat(loanAmount), parseInt(periodMonths),
-      parseFloat(monthlyDeduction), parseFloat(interestRate), 
-      parseFloat(totalAmount), 'web_user', new Date(), parseFloat(totalAmount)
-    ];
-    
-    if (existingColumns.includes('status')) {
-      insertFields.push('status');
-      insertValues.push('Pending');
-    }
-    
-    const placeholders = insertValues.map((_, i) => `$${i + 1}`).join(', ');
-    const insertQuery = `INSERT INTO pb_saccoloan (${insertFields.join(', ')}) VALUES (${placeholders})`;
-    
-    await dbPool.query(insertQuery, insertValues);
-    
-    res.status(200).json({
-      success: true,
-      message: 'Loan application submitted successfully',
-      loanNumber: loanNumber,
-      data: {
-        memberNo,
-        loanNumber,
-        amount: loanAmount,
-        period: periodMonths,
-        monthlyDeduction,
-        totalAmount
-      }
-    });
-    
-  } catch (error) {
-    console.error(`   ❌ Error:`, error.message);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to submit loan application: ' + error.message
-    });
-  }
-});
-
-// ============================================
-// LOCAL ENDPOINT: LOAN STATEMENT PDF
-// ============================================
-app.post('/api/v1/loan-statement-direct', async (req, res) => {
-  const { loanNo, memberNo, startDate, endDate } = req.body;
-  console.log(`\n📄 [LOCAL] Generating PDF for Loan: ${loanNo}`);
-  
-  try {
-    const headerResult = await dbPool.query("SELECT header_name FROM pb_header LIMIT 1");
-    const organisationName = headerResult.rows[0]?.header_name || 'METROPOLITAN HOSPITAL SACCO LTD';
-    
-    const loanResult = await dbPool.query(
-      `SELECT lpurpose as purpose, amount, cdate as start_date, edate as end_date, period, interest
-       FROM pb_saccoloan WHERE loan_no = $1`,
-      [loanNo]
-    );
-    
-    if (loanResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Loan not found' });
-    }
-    const loan = loanResult.rows[0];
-    
-    const memberResult = await dbPool.query(
-      `SELECT holders_name, id_no, tel1, email_add, acc_no 
-       FROM pb_share_register WHERE acc_no = $1`,
-      [memberNo]
-    );
-    
-    if (memberResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Member not found' });
-    }
-    const member = memberResult.rows[0];
-    
-    const openingResult = await dbPool.query(
-      `SELECT COALESCE(SUM(balance - credit_bal), 0) as opening_balance
-       FROM ac_debtors 
-       WHERE account_no = $1 AND invoice_no = $2 AND date::date < $3::date`,
-      [memberNo, loanNo, startDate]
-    );
-    const openingBalance = parseFloat(openingResult.rows[0]?.opening_balance || 0);
-    
-    const transResult = await dbPool.query(
-      `SELECT TO_CHAR(date, 'DD/MM/YYYY') as trans_date,
-              initcap(item) as item, reference_no, receipt_no,
-              COALESCE(balance, 0) as debit, COALESCE(credit_bal, 0) as credit
-       FROM ac_debtors 
-       WHERE account_no = $1 AND invoice_no = $2
-         AND date::date BETWEEN $3::date AND $4::date
-         AND (balance <> 0 OR credit_bal <> 0)
-       ORDER BY date ASC`,
-      [memberNo, loanNo, startDate, endDate]
-    );
-    
-    const doc = new PDFDocument({ margin: 50, size: 'A4' });
-    const chunks = [];
-    
-    doc.on('data', chunk => chunks.push(chunk));
-    doc.on('end', () => {
-      const pdfBuffer = Buffer.concat(chunks);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=loan-statement-${loanNo}.pdf`);
-      res.send(pdfBuffer);
-    });
-    
-    doc.fontSize(16).font('Helvetica-Bold').text(organisationName, { align: 'center' });
-    doc.moveDown();
-    doc.fontSize(14).font('Helvetica-Bold').text('LOAN STATEMENT', { align: 'center' });
-    doc.moveDown();
-    
-    doc.fontSize(10).font('Helvetica-Bold').text('MEMBER INFORMATION');
-    doc.font('Helvetica');
-    doc.text(`Name: ${member.holders_name || 'N/A'}`);
-    doc.text(`Member No: ${member.acc_no || memberNo}`);
-    doc.text(`ID No: ${member.id_no || 'N/A'}`);
-    doc.text(`Phone: ${member.tel1 || 'N/A'}`);
-    doc.text(`Email: ${member.email_add || 'N/A'}`);
-    doc.moveDown();
-    
-    doc.font('Helvetica-Bold').text('LOAN INFORMATION');
-    doc.font('Helvetica');
-    doc.text(`Loan Number: ${loanNo}`);
-    doc.text(`Purpose: ${loan.purpose || 'N/A'}`);
-    doc.text(`Amount: KES ${parseFloat(loan.amount || 0).toLocaleString()}`);
-    doc.text(`Interest Rate: ${loan.interest || 0}%`);
-    doc.text(`Period: ${loan.period || 0} months`);
-    doc.text(`Start Date: ${loan.start_date ? new Date(loan.start_date).toLocaleDateString('en-GB') : 'N/A'}`);
-    doc.text(`End Date: ${loan.end_date ? new Date(loan.end_date).toLocaleDateString('en-GB') : 'N/A'}`);
-    doc.moveDown();
-    
-    doc.font('Helvetica-Bold').text('TRANSACTION HISTORY', { underline: true });
-    doc.moveDown(0.5);
-    
-    let runningBalance = openingBalance;
-    let totalDebit = 0, totalCredit = 0;
-    let y = doc.y + 10;
-    
-    doc.font('Helvetica-Bold').fontSize(8);
-    doc.text('Date', 50, y);
-    doc.text('Description', 100, y);
-    doc.text('Ref No', 250, y);
-    doc.text('Receipt No', 320, y);
-    doc.text('Debit (KES)', 400, y, { align: 'right' });
-    doc.text('Credit (KES)', 470, y, { align: 'right' });
-    doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
-    y += 18;
-    doc.font('Helvetica').fontSize(8);
-    
-    doc.text('-', 50, y);
-    doc.text('OPENING BALANCE', 100, y);
-    doc.text('-', 250, y);
-    doc.text('-', 320, y);
-    doc.text(openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
-    doc.text('-', 470, y, { align: 'right' });
-    y += 15;
-    
-    for (const row of transResult.rows) {
-      const debit = parseFloat(row.debit) || 0;
-      const credit = parseFloat(row.credit) || 0;
-      runningBalance = runningBalance + debit - credit;
-      totalDebit += debit;
-      totalCredit += credit;
-      
-      if (y > 700) {
-        doc.addPage();
-        y = 50;
-        doc.font('Helvetica-Bold').fontSize(8);
-        doc.text('Date', 50, y);
-        doc.text('Description', 100, y);
-        doc.text('Ref No', 250, y);
-        doc.text('Receipt No', 320, y);
-        doc.text('Debit (KES)', 400, y, { align: 'right' });
-        doc.text('Credit (KES)', 470, y, { align: 'right' });
-        doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
-        y += 18;
-        doc.font('Helvetica').fontSize(8);
-      }
-      
-      doc.text(row.trans_date || '-', 50, y);
-      doc.text((row.item || 'Transaction').substring(0, 30), 100, y);
-      doc.text((row.reference_no || '-').substring(0, 15), 250, y);
-      doc.text((row.receipt_no || '-').substring(0, 15), 320, y);
-      doc.text(debit > 0 ? debit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 400, y, { align: 'right' });
-      doc.text(credit > 0 ? credit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 470, y, { align: 'right' });
-      y += 15;
-    }
-    
-    y += 5;
-    doc.font('Helvetica-Bold');
-    doc.text('TOTALS', 100, y);
-    doc.text(totalDebit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
-    doc.text(totalCredit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 470, y, { align: 'right' });
-    y += 15;
-    doc.text('CLOSING BALANCE', 100, y);
-    doc.text(runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
-    
-    doc.moveDown();
-    doc.fontSize(8).font('Helvetica');
-    doc.text('This is a computer-generated statement.', { align: 'center' });
-    doc.text(`Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
-    doc.end();
-    
-  } catch (error) {
-    console.error('   ❌ Error:', error.message);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============================================
-// LOCAL ENDPOINT: WITHDRAWABLE DEPOSIT STATEMENT PDF
-// ============================================
-app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
-  const { accountNo, startDate, endDate } = req.body;
-  console.log(`\n📄 [LOCAL] Generating Withdrawable Statement for: ${accountNo}`);
-  
-  try {
-    const headerResult = await dbPool.query("SELECT header_name FROM pb_header LIMIT 1");
-    const organisationName = headerResult.rows[0]?.header_name || 'METROPOLITAN HOSPITAL SACCO LTD';
-    
-    const accountResult = await dbPool.query(
-      `SELECT holders_name, acc_no, tel1, postal_code, postal_address, id_no, email_add
-       FROM pb_wdeposit_register WHERE acc_no = $1`,
-      [accountNo]
-    );
-    
-    if (accountResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Account not found' });
-    }
-    const account = accountResult.rows[0];
-    
-    const openingResult = await dbPool.query(
-      `SELECT COALESCE(SUM(credit - debit), 0) as opening_balance
-       FROM ac_wdeposit_payable 
-       WHERE account_no = $1 AND date::date < $2::date`,
-      [accountNo, startDate]
-    );
-    const openingBalance = parseFloat(openingResult.rows[0]?.opening_balance || 0);
-    
-    const transResult = await dbPool.query(
-      `SELECT TO_CHAR(date, 'DD/MM/YYYY') as trans_date,
-              initcap(item) as item, reference_no, receipt_no,
-              COALESCE(debit, 0) as debit, COALESCE(credit, 0) as credit
-       FROM ac_wdeposit_payable 
-       WHERE account_no = $1 
-         AND date::date BETWEEN $2::date AND $3::date
-         AND (debit <> 0 OR credit <> 0)
-       ORDER BY date ASC`,
-      [accountNo, startDate, endDate]
-    );
-    
-    const interestResult = await dbPool.query(
-      `SELECT COALESCE(SUM(credit - debit), 0) as period_interest
-       FROM ac_wdeposit_payable 
-       WHERE account_no = $1 
-         AND date::date BETWEEN $2::date AND $3::date
-         AND reference_no ILIKE 'WINT%'`,
-      [accountNo, startDate, endDate]
-    );
-    
-    const periodInterest = parseFloat(interestResult.rows[0]?.period_interest || 0);
-    
-    const doc = new PDFDocument({ margin: 50, size: 'A4' });
-    const chunks = [];
-    
-    doc.on('data', chunk => chunks.push(chunk));
-    doc.on('end', () => {
-      const pdfBuffer = Buffer.concat(chunks);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename=withdrawable-statement-${accountNo}.pdf`);
-      res.send(pdfBuffer);
-    });
-    
-    doc.fontSize(16).font('Helvetica-Bold').text(organisationName, { align: 'center' });
-    doc.moveDown();
-    doc.fontSize(14).font('Helvetica-Bold').text('WITHDRAWABLE DEPOSITS STATEMENT', { align: 'center' });
-    doc.moveDown();
-    
-    doc.fontSize(10).font('Helvetica-Bold').text('ACCOUNT INFORMATION');
-    doc.font('Helvetica');
-    doc.text(`Name: ${account.holders_name || 'N/A'}`);
-    doc.text(`Account No: ${account.acc_no || accountNo}`);
-    doc.text(`ID No: ${account.id_no || 'N/A'}`);
-    doc.text(`Phone: ${account.tel1 || 'N/A'}`);
-    doc.text(`Email: ${account.email_add || 'N/A'}`);
-    doc.moveDown();
-    
-    doc.font('Helvetica-Bold').text(`STATEMENT PERIOD: ${new Date(startDate).toLocaleDateString('en-GB')} TO ${new Date(endDate).toLocaleDateString('en-GB')}`);
-    doc.text(`Print Date: ${new Date().toLocaleDateString('en-GB')}`);
-    doc.moveDown();
-    
-    doc.font('Helvetica-Bold').text('TRANSACTION HISTORY', { underline: true });
-    doc.moveDown(0.5);
-    
-    let runningBalance = openingBalance;
-    let totalDebit = 0, totalCredit = 0;
-    let y = doc.y + 10;
-    
-    doc.font('Helvetica-Bold').fontSize(8);
-    doc.text('Date', 50, y);
-    doc.text('Narration', 100, y);
-    doc.text('Ref No', 250, y);
-    doc.text('Receipt No', 320, y);
-    doc.text('Withdrawn (KES)', 400, y, { align: 'right' });
-    doc.text('Deposited (KES)', 470, y, { align: 'right' });
-    doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
-    y += 18;
-    doc.font('Helvetica').fontSize(8);
-    
-    doc.text('-', 50, y);
-    doc.text('BAL/BF', 100, y);
-    doc.text('-', 250, y);
-    doc.text('-', 320, y);
-    doc.text(openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
-    doc.text('-', 470, y, { align: 'right' });
-    y += 15;
-    
-    for (const row of transResult.rows) {
-      const debit = parseFloat(row.debit) || 0;
-      const credit = parseFloat(row.credit) || 0;
-      runningBalance = runningBalance + credit - debit;
-      totalDebit += debit;
-      totalCredit += credit;
-      
-      if (y > 700) {
-        doc.addPage();
-        y = 50;
-        doc.font('Helvetica-Bold').fontSize(8);
-        doc.text('Date', 50, y);
-        doc.text('Narration', 100, y);
-        doc.text('Ref No', 250, y);
-        doc.text('Receipt No', 320, y);
-        doc.text('Withdrawn (KES)', 400, y, { align: 'right' });
-        doc.text('Deposited (KES)', 470, y, { align: 'right' });
-        doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
-        y += 18;
-        doc.font('Helvetica').fontSize(8);
-      }
-      
-      doc.text(row.trans_date || '-', 50, y);
-      doc.text((row.item || 'Transaction').substring(0, 35), 100, y);
-      doc.text((row.reference_no || '-').substring(0, 15), 250, y);
-      doc.text((row.receipt_no || '-').substring(0, 15), 320, y);
-      doc.text(debit > 0 ? debit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 400, y, { align: 'right' });
-      doc.text(credit > 0 ? credit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 470, y, { align: 'right' });
-      y += 15;
-    }
-    
-    y += 5;
-    doc.font('Helvetica-Bold');
-    doc.text('TOTALS', 100, y);
-    doc.text(totalDebit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
-    doc.text(totalCredit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 470, y, { align: 'right' });
-    y += 15;
-    doc.text('CLOSING BALANCE', 100, y);
-    doc.text(runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
-    y += 20;
-    
-    if (periodInterest !== 0) {
-      doc.font('Helvetica-Bold').text('INTEREST INFORMATION', { underline: true });
-      doc.font('Helvetica');
-      doc.text(`INTEREST FOR THE PERIOD: KES ${periodInterest.toLocaleString(undefined, { minimumFractionDigits: 2 })}`);
-    }
-    
-    doc.moveDown();
-    doc.fontSize(8).font('Helvetica');
-    doc.text('This is a computer-generated statement.', { align: 'center' });
-    doc.text(`Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
-    doc.end();
-    
-  } catch (error) {
-    console.error('   ❌ Error:', error.message);
-    res.status(500).json({ error: error.message });
-  }
-});
+// ... (your existing withdrawable-statement-direct endpoint)
 
 // ============================================
 // Start the server
 // ============================================
 app.listen(port, '0.0.0.0', () => {
   console.log(`\n${'='.repeat(60)}`);
-  console.log(`🚀 PROXY SERVER RUNNING ON PORT ${port}`);
+  console.log(`🚀 PROXY SERVER RUNNING`);
   console.log(`${'='.repeat(60)}`);
   console.log(`📍 URL: http://localhost:${port}`);
-  console.log(`\n✅ LOCAL ENDPOINTS (handled by this proxy):`);
-  console.log(`   POST   /api/v1/auth/change-password - NOW HANDLED LOCALLY ✅`);
-  console.log(`   POST   /api/v1/loan/apply - Submit loan application`);
-  console.log(`   GET    /api/v1/instant/:memberNo - Fetch member's loans`);
+  console.log(`\n✅ FORWARDING to live server: ${LIVE_API_BASE}`);
+  console.log(`\n✅ LOCAL ENDPOINTS:`);
+  console.log(`   POST   /api/v1/auth/change-password (FIXED - using "login name" and "created at")`);
+  console.log(`   POST   /api/v1/registerOtp`);
   console.log(`   POST   /api/v1/loan-statement-direct`);
   console.log(`   POST   /api/v1/withdrawable-statement-direct`);
-  console.log(`\n🔄 FORWARDED ENDPOINTS (handled by live server):`);
-  console.log(`   POST   /api/v1/auth/authenticate - Login handled by live`);
-  console.log(`   All other /api/v1/* requests will be forwarded to live server`);
+  console.log(`\n🔍 DEBUG ENDPOINTS:`);
+  console.log(`   GET    /api/v1/debug/check-otp/:memberNo`);
+  console.log(`   DELETE /api/v1/debug/clear-otp/:memberNo`);
+  console.log(`\n🧪 TEST ENDPOINT: http://localhost:${port}/api/v1/test`);
   console.log(`${'='.repeat(60)}\n`);
 });

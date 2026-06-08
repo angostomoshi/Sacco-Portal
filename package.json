@@ -4,30 +4,28 @@
   "private": true,
   "proxy": "http://localhost:3023",
   "dependencies": {
-    "axios": "^1.16.1",
-<<<<<<< HEAD
     "bcrypt": "^6.0.0",
-=======
-    "bcryptjs": "^3.0.3",
->>>>>>> 00a71f51d084808f2fa6d78855e050d645bc8b65
     "chart.js": "^4.5.1",
-    "cors": "^2.8.6",
-    "express": "^5.2.1",
     "html2canvas": "^1.4.1",
     "jspdf": "^2.5.1",
-    "pdfkit": "^0.18.0",
-    "pg": "^8.21.0",
     "react": "^18.2.0",
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^18.2.0",
     "react-icons": "^5.6.0",
     "react-router-dom": "^6.8.0",
     "react-scripts": "5.0.1",
+    "sqlite3": "^6.0.1",
     "web-vitals": "^2.1.4"
   },
   "devDependencies": {
+    "axios": "^1.17.0",
     "concurrently": "^8.2.2",
-    "http-proxy-middleware": "^2.0.9"
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "http-proxy-middleware": "^2.0.9",
+    "jsonwebtoken": "^9.0.3",
+    "pdfkit": "^0.18.0",
+    "pg": "^8.21.0"
   },
   "scripts": {
     "start": "react-scripts start",
@@ -35,7 +33,7 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "proxy-server": "node proxy-server.js",
-    "dev": "concurrently \"npm run proxy-server\" \"npm start\""
+    "dev": "concurrently --kill-others-on-fail \"npm:proxy-server\" \"npm:start\""
   },
   "browserslist": {
     "production": [
