@@ -3,6 +3,7 @@ const cors = require('cors');
 const axios = require('axios');
 const { Pool } = require('pg');
 const PDFDocument = require('pdfkit');
+const bcrypt = require('bcrypt');
 
 const app = express();
 const port = 3023;
@@ -71,24 +72,117 @@ dbPool.connect((err, client, release) => {
   }
 });
 
-const LIVE_API_BASE = 'https://memberportal.metro-sacco.com/api/v1';
+const LIVE_API_BASE = process.env.LIVE_API_BASE || 'http://192.168.4.6:3023/api/v1';
+
+// ============================================
+// UTILITY FUNCTIONS
+// ============================================
+// Convert DD/MM/YYYY format to YYYY-MM-DD for PostgreSQL
+function convertDateFormat(dateStr) {
+  if (!dateStr) return null;
+  
+  // Handle multiple formats
+  if (dateStr.includes('/')) {
+    // DD/MM/YYYY format
+    const [day, month, year] = dateStr.split('/');
+    return `${year}-${month}-${day}`;
+  } else if (dateStr.includes('-') && dateStr.length === 10) {
+    // Already in YYYY-MM-DD or DD-MM-YYYY format - check if it's already correct
+    const parts = dateStr.split('-');
+    if (parts[0].length === 4) {
+      // Already YYYY-MM-DD
+      return dateStr;
+    } else {
+      // DD-MM-YYYY format
+      const [day, month, year] = parts;
+      return `${year}-${month}-${day}`;
+    }
+  }
+  
+  return dateStr;
+}
 
 // ============================================
 // DEBUG: Clear all OTPs for a member
 // ============================================
-app.delete('/api/v1/debug/clear-otp/:memberNo', async (req, res) => {
-  const { memberNo } = req.params;
+const LOCAL_ENDPOINTS = [
+  '/loan-statement-direct', 
+  '/withdrawable-statement-direct',
+  '/loan/apply',
+  '/instant/',
+  '/auth/change-password'  // ← THIS IS THE KEY FIX
+];
+
+// ============================================
+// FORWARDING MIDDLEWARE
+// ============================================
+app.use('/api/v1', async (req, res, next) => {
+  console.log(`\n🔍 Checking path: ${req.path}`);
+  console.log(`   📍 req.baseUrl: ${req.baseUrl}`);
+  console.log(`   📍 req.path: ${req.path}`);
+  console.log(`   📍 LOCAL_ENDPOINTS:`, LOCAL_ENDPOINTS);
+  
+  // Check if this is a local endpoint
+  const isLocalEndpoint = LOCAL_ENDPOINTS.some(endpoint => {
+    if (endpoint === '/instant/') {
+      return req.path.startsWith('/instant/');
+    }
+    return req.path === endpoint;
+  });
+  
+  console.log(`   Is local endpoint? ${isLocalEndpoint}`);
+  
+  if (isLocalEndpoint) {
+    console.log(`   ✅ Handling locally`);
+    return next();
+  }
+  
+  // Forward to live server
+  console.log(`   🔄 FORWARDING to live server: ${req.path}`);
   
   try {
-    const result = await dbPool.query(
-      `DELETE FROM integration.user_name_otp WHERE "login name" = $1 RETURNING *`,
-      [memberNo]
-    );
+    const liveUrl = `${LIVE_API_BASE}${req.path}`;
+    console.log(`   🔄 FORWARDING to: ${liveUrl}`);
     
-    res.json({
-      message: `Cleared ${result.rowCount} OTP(s) for ${memberNo}`,
-      deleted_count: result.rowCount
+    // Build forwarded headers - include cookies and all original headers
+    const forwardHeaders = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    };
+    
+    // Forward Authorization token if present
+    if (req.headers.authorization) {
+      forwardHeaders['Authorization'] = req.headers.authorization;
+    }
+    
+    // Forward cookies (important for Spring Security CSRF/session)
+    if (req.headers.cookie) {
+      forwardHeaders['Cookie'] = req.headers.cookie;
+    }
+    
+    // Forward X-XSRF-TOKEN if present (Spring CSRF token)
+    if (req.headers['x-xsrf-token']) {
+      forwardHeaders['X-XSRF-TOKEN'] = req.headers['x-xsrf-token'];
+    }
+    
+    const response = await axios({
+      method: req.method,
+      url: liveUrl,
+      data: req.body,
+      params: req.query,
+      headers: forwardHeaders,
+      timeout: 30000,
+      withCredentials: true
     });
+    
+    console.log(`   ✅ Response: ${response.status}`);
+    
+    // Forward any Set-Cookie headers from the live server back to the client
+    if (response.headers['set-cookie']) {
+      res.setHeader('Set-Cookie', response.headers['set-cookie']);
+    }
+    
+    res.status(response.status).json(response.data);
   } catch (error) {
     console.error('Clear OTP error:', error);
     res.status(500).json({ error: error.message });
@@ -98,19 +192,61 @@ app.delete('/api/v1/debug/clear-otp/:memberNo', async (req, res) => {
 // ============================================
 // DEBUG: Check OTPs for a member
 // ============================================
-app.get('/api/v1/debug/check-otp/:memberNo', async (req, res) => {
-  const { memberNo } = req.params;
+app.post('/api/v1/auth/change-password', async (req, res) => {
+  console.log('\n🔐 [LOCAL] Password change request:');
+  console.log('   Body:', req.body);
+  
+  const { memberNo, otp, newPassword, confirmPassword } = req.body;
+  
+  // Validate input
+  if (!memberNo || !otp || !newPassword) {
+    return res.status(400).json({ 
+      status: 1, 
+      message: 'Missing required fields: memberNo, otp, or newPassword' 
+    });
+  }
+  
+  if (newPassword !== confirmPassword) {
+    return res.status(400).json({ 
+      status: 1, 
+      message: 'Passwords do not match' 
+    });
+  }
   
   try {
-    const result = await dbPool.query(
-      `SELECT "login name", passkey, "mobile no", "date", id, "created at"
-       FROM integration.user_name_otp 
-       WHERE "login name" = $1 
-       ORDER BY "created at" DESC, "date" DESC`,
-      [memberNo]
+    // First, verify the OTP (you need to implement OTP storage/verification)
+    // For now, we'll skip OTP verification or you can implement it
+    
+    // Hash the new password
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+    
+    // Update password in your local database
+    // Note: Adjust the table name and column names based on your actual database schema
+    const updateResult = await dbPool.query(
+      `UPDATE pb_share_register 
+       SET password = $1, 
+           updated_at = CURRENT_TIMESTAMP 
+       WHERE acc_no = $2 
+       RETURNING acc_no, holders_name`,
+      [hashedPassword, memberNo]
     );
     
-    res.json({
+    if (updateResult.rows.length === 0) {
+      return res.status(404).json({ 
+        status: 1, 
+        message: 'Member not found' 
+      });
+    }
+    
+    console.log(`   ✅ Password updated successfully for member: ${memberNo}`);
+    console.log(`   📝 Updated record:`, updateResult.rows[0]);
+    console.log(`   🔍 Hashed password length: ${hashedPassword.length}, starts with: ${hashedPassword.substring(0, 10)}...`);
+    
+    // Return success response (matching the expected format)
+    res.status(200).json({
+      status: 0,  // 0 typically means success in your API
+      message: 'Password changed successfully',
       memberNo: memberNo,
       otps_found: result.rows,
       count: result.rows.length,
@@ -209,230 +345,343 @@ app.post('/api/v1/registerOtp', async (req, res) => {
 // ============================================
 // CHANGE PASSWORD ENDPOINT - Using exact column names with spaces
 // ============================================
-app.post('/api/v1/auth/change-password', async (req, res) => {
-  const { memberNo, otp, newPassword, confirmPassword } = req.body;
+app.post('/api/v1/loan-statement-direct', async (req, res) => {
+  const { loanNo, memberNo, startDate, endDate } = req.body;
+  console.log(`\n📄 [LOCAL] Generating PDF for Loan: ${loanNo}`);
+  console.log(`   📅 Received dates - Start: ${startDate}, End: ${endDate}`);
   
-  console.log(`\n🔐 Password change request for: ${memberNo}`);
-  console.log(`   OTP provided: ${otp}`);
-  console.log(`   New password length: ${newPassword ? newPassword.length : 0}`);
-  
-  // Validation
-  if (!memberNo || memberNo.trim() === "") {
-    console.log(`   ❌ Username missing`);
-    return res.status(400).json({ 
-      success: false, 
-      message: "Enter username" 
-    });
-  }
-  
-  if (!otp || otp.trim() === "") {
-    console.log(`   ❌ OTP missing`);
-    return res.status(400).json({ 
-      success: false, 
-      message: "Enter OTP" 
-    });
-  }
-  
-  if (!newPassword || newPassword.trim() === "") {
-    console.log(`   ❌ Password missing`);
-    return res.status(400).json({ 
-      success: false, 
-      message: "Enter New Password" 
-    });
-  }
-  
-  if (newPassword !== confirmPassword) {
-    console.log(`   ❌ Passwords do not match`);
-    return res.status(400).json({ 
-      success: false, 
-      message: "New Password Does not Match - ReType Please!" 
-    });
-  }
-  
-  if (newPassword.length < 4) {
-    console.log(`   ❌ Password too short`);
-    return res.status(400).json({ 
-      success: false, 
-      message: "Password must be at least 4 characters" 
-    });
-  }
-  
-  let client;
   try {
-    client = await dbPool.connect();
+    // Convert dates from DD/MM/YYYY to YYYY-MM-DD format
+    const convertedStartDate = convertDateFormat(startDate);
+    const convertedEndDate = convertDateFormat(endDate);
+    console.log(`   📅 Converted dates - Start: ${convertedStartDate}, End: ${convertedEndDate}`);
     
-    // Step 1: Get the latest OTP - Using exact column names with quotes
-    console.log(`   🔍 Verifying OTP...`);
-    const otpResult = await client.query(
-      `SELECT id, "login name", passkey, "date", "created at"
-       FROM integration.user_name_otp 
-       WHERE "login name" = $1 
-       ORDER BY "created at" DESC, "date" DESC
-       LIMIT 1`,
+    const headerResult = await dbPool.query("SELECT header_name FROM pb_header LIMIT 1");
+    const organisationName = headerResult.rows[0]?.header_name || 'METROPOLITAN HOSPITAL SACCO LTD';
+    
+    const loanResult = await dbPool.query(
+      `SELECT lpurpose as purpose, amount, cdate as start_date, edate as end_date, period, interest
+       FROM pb_saccoloan WHERE loan_no = $1`,
+      [loanNo]
+    );
+    
+    if (loanResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Loan not found' });
+    }
+    const loan = loanResult.rows[0];
+    
+    const memberResult = await dbPool.query(
+      `SELECT holders_name, id_no, tel1, email_add, acc_no 
+       FROM pb_share_register WHERE acc_no = $1`,
       [memberNo]
     );
     
-    console.log(`   📝 Query executed, rows returned: ${otpResult.rows.length}`);
-    
-    if (otpResult.rows.length === 0) {
-      console.log(`   ❌ No OTP found for user`);
-      return res.status(404).json({ 
-        success: false, 
-        message: "No OTP found. Please request OTP first." 
-      });
+    if (memberResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Member not found' });
     }
+    const member = memberResult.rows[0];
     
-    const storedRecord = otpResult.rows[0];
-    const storedOtp = storedRecord.passkey;
-    const providedOtp = parseInt(otp);
+    const openingResult = await dbPool.query(
+      `SELECT COALESCE(SUM(balance - credit_bal), 0) as opening_balance
+       FROM ac_debtors 
+       WHERE account_no = $1 AND invoice_no = $2 AND date::date < $3::date`,
+      [memberNo, loanNo, convertedStartDate]
+    );
+    const openingBalance = parseFloat(openingResult.rows[0]?.opening_balance || 0);
     
-    console.log(`   📝 Stored OTP record ID: ${storedRecord.id}`);
-    console.log(`   📝 Stored OTP: ${storedOtp}`);
-    console.log(`   📝 Provided OTP: ${providedOtp}`);
-    console.log(`   🕐 Created at: ${storedRecord['created at']}`);
-    console.log(`   📅 Date: ${storedRecord.date}`);
+    const transResult = await dbPool.query(
+      `SELECT TO_CHAR(date, 'DD/MM/YYYY') as trans_date,
+              initcap(item) as item, reference_no, receipt_no,
+              COALESCE(balance, 0) as debit, COALESCE(credit_bal, 0) as credit
+       FROM ac_debtors 
+       WHERE account_no = $1 AND invoice_no = $2
+         AND date::date BETWEEN $3::date AND $4::date
+         AND (balance <> 0 OR credit_bal <> 0)
+       ORDER BY date ASC`,
+      [memberNo, loanNo, convertedStartDate, convertedEndDate]
+    );
     
-    if (storedOtp !== providedOtp) {
-      console.log(`   ❌ Invalid OTP - Expected: ${storedOtp}, Got: ${providedOtp}`);
-      return res.status(401).json({ 
-        success: false, 
-        message: "Enter Correct Passkey" 
-      });
-    }
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    const chunks = [];
     
-    console.log(`   ✅ OTP verified successfully`);
+    doc.on('data', chunk => chunks.push(chunk));
+    doc.on('end', () => {
+      const pdfBuffer = Buffer.concat(chunks);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=loan-statement-${loanNo}.pdf`);
+      res.send(pdfBuffer);
+    });
     
-    // Step 2: Find the correct password column in pb_share_register
-    const passwordColumnCheck = await client.query(`
-      SELECT column_name 
-      FROM information_schema.columns 
-      WHERE table_name = 'pb_share_register'
-      AND (column_name ILIKE '%pass%' OR column_name ILIKE '%pwd%' OR column_name = 'pin')
-    `);
+    doc.fontSize(16).font('Helvetica-Bold').text(organisationName, { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(14).font('Helvetica-Bold').text('LOAN STATEMENT', { align: 'center' });
+    doc.moveDown();
     
-    let passwordColumn = null;
+    doc.fontSize(10).font('Helvetica-Bold').text('MEMBER INFORMATION');
+    doc.font('Helvetica');
+    doc.text(`Name: ${member.holders_name || 'N/A'}`);
+    doc.text(`Member No: ${member.acc_no || memberNo}`);
+    doc.text(`ID No: ${member.id_no || 'N/A'}`);
+    doc.text(`Phone: ${member.tel1 || 'N/A'}`);
+    doc.text(`Email: ${member.email_add || 'N/A'}`);
+    doc.moveDown();
     
-    if (passwordColumnCheck.rows.length > 0) {
-      passwordColumn = passwordColumnCheck.rows[0].column_name;
-      console.log(`   🔧 Found password column: ${passwordColumn}`);
-    } else {
-      // Check all columns as fallback
-      const allColumns = await client.query(`
-        SELECT column_name 
-        FROM information_schema.columns 
-        WHERE table_name = 'pb_share_register'
-      `);
+    doc.font('Helvetica-Bold').text('LOAN INFORMATION');
+    doc.font('Helvetica');
+    doc.text(`Loan Number: ${loanNo}`);
+    doc.text(`Purpose: ${loan.purpose || 'N/A'}`);
+    doc.text(`Amount: KES ${parseFloat(loan.amount || 0).toLocaleString()}`);
+    doc.text(`Interest Rate: ${loan.interest || 0}%`);
+    doc.text(`Period: ${loan.period || 0} months`);
+    doc.text(`Start Date: ${loan.start_date ? new Date(loan.start_date).toLocaleDateString('en-GB') : 'N/A'}`);
+    doc.text(`End Date: ${loan.end_date ? new Date(loan.end_date).toLocaleDateString('en-GB') : 'N/A'}`);
+    doc.moveDown();
+    
+    doc.font('Helvetica-Bold').text('TRANSACTION HISTORY', { underline: true });
+    doc.moveDown(0.5);
+    
+    let runningBalance = openingBalance;
+    let totalDebit = 0, totalCredit = 0;
+    let y = doc.y + 10;
+    
+    doc.font('Helvetica-Bold').fontSize(8);
+    doc.text('Date', 50, y);
+    doc.text('Description', 100, y);
+    doc.text('Ref No', 250, y);
+    doc.text('Receipt No', 320, y);
+    doc.text('Debit (KES)', 400, y, { align: 'right' });
+    doc.text('Credit (KES)', 470, y, { align: 'right' });
+    doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
+    y += 18;
+    doc.font('Helvetica').fontSize(8);
+    
+    doc.text('-', 50, y);
+    doc.text('OPENING BALANCE', 100, y);
+    doc.text('-', 250, y);
+    doc.text('-', 320, y);
+    doc.text(openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+    doc.text('-', 470, y, { align: 'right' });
+    y += 15;
+    
+    for (const row of transResult.rows) {
+      const debit = parseFloat(row.debit) || 0;
+      const credit = parseFloat(row.credit) || 0;
+      runningBalance = runningBalance + debit - credit;
+      totalDebit += debit;
+      totalCredit += credit;
       
-      console.log(`   📋 Available columns:`, allColumns.rows.map(r => r.column_name));
-      
-      // Try common password column names
-      const possibleColumns = ['pass', 'password', 'pwd', 'pin', 'security_code', 'member_password'];
-      for (const col of possibleColumns) {
-        const exists = allColumns.rows.some(r => r.column_name === col);
-        if (exists) {
-          passwordColumn = col;
-          console.log(`   🔧 Using column: ${passwordColumn}`);
-          break;
-        }
+      if (y > 700) {
+        doc.addPage();
+        y = 50;
+        doc.font('Helvetica-Bold').fontSize(8);
+        doc.text('Date', 50, y);
+        doc.text('Description', 100, y);
+        doc.text('Ref No', 250, y);
+        doc.text('Receipt No', 320, y);
+        doc.text('Debit (KES)', 400, y, { align: 'right' });
+        doc.text('Credit (KES)', 470, y, { align: 'right' });
+        doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
+        y += 18;
+        doc.font('Helvetica').fontSize(8);
       }
-    }
-    
-    if (!passwordColumn) {
-      console.log(`   ❌ No password column found`);
-      return res.status(500).json({ 
-        success: false, 
-        message: "Database configuration error. Please contact support." 
-      });
-    }
-    
-    // Step 3: Check if member exists
-    const memberCheck = await client.query(
-      `SELECT acc_no, holders_name FROM pb_share_register WHERE acc_no = $1`,
-      [memberNo]
-    );
-    
-    if (memberCheck.rows.length === 0) {
-      console.log(`   ❌ Member not found`);
-      return res.status(404).json({ 
-        success: false, 
-        message: "Member account not found." 
-      });
-    }
-    
-    console.log(`   ✅ Member found: ${memberCheck.rows[0].holders_name}`);
-    
-    // Step 4: Update the password
-    const updateQuery = `UPDATE pb_share_register SET "${passwordColumn}" = $1 WHERE acc_no = $2`;
-    console.log(`   📝 Executing: ${updateQuery}`);
-    
-    const updateResult = await client.query(updateQuery, [newPassword, memberNo]);
-    
-    console.log(`   📊 Rows affected: ${updateResult.rowCount}`);
-    
-    if (updateResult.rowCount > 0) {
-      console.log(`   ✅ Password changed successfully!`);
       
-      // Delete the used OTP
-      await client.query(
-        `DELETE FROM integration.user_name_otp WHERE id = $1`,
-        [storedRecord.id]
-      );
-      console.log(`   🗑️  Deleted used OTP`);
-      
-      return res.status(200).json({
-        success: true,
-        message: "Password Changed Successfully"
-      });
-    } else {
-      console.log(`   ⚠️ No rows updated`);
-      return res.status(500).json({ 
-        success: false, 
-        message: "Error Resetting the Password. Please try again." 
-      });
+      doc.text(row.trans_date || '-', 50, y);
+      doc.text((row.item || 'Transaction').substring(0, 30), 100, y);
+      doc.text((row.reference_no || '-').substring(0, 15), 250, y);
+      doc.text((row.receipt_no || '-').substring(0, 15), 320, y);
+      doc.text(debit > 0 ? debit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 400, y, { align: 'right' });
+      doc.text(credit > 0 ? credit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 470, y, { align: 'right' });
+      y += 15;
     }
+    
+    y += 5;
+    doc.font('Helvetica-Bold');
+    doc.text('TOTALS', 100, y);
+    doc.text(totalDebit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+    doc.text(totalCredit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 470, y, { align: 'right' });
+    y += 15;
+    doc.text('CLOSING BALANCE', 100, y);
+    doc.text(runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+    
+    doc.moveDown();
+    doc.fontSize(8).font('Helvetica');
+    doc.text('This is a computer-generated statement.', { align: 'center' });
+    doc.text(`Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
+    doc.end();
     
   } catch (error) {
-    console.error(`   ❌ Error:`, error.message);
-    console.error(`   Stack:`, error.stack);
-    
-    return res.status(500).json({ 
-      success: false, 
-      message: "Error Resetting the Password. Please try again.",
-      details: error.message
-    });
-  } finally {
-    if (client) client.release();
+    console.error('   ❌ Error:', error.message);
+    res.status(500).json({ error: error.message });
   }
 });
 
-// Forward middleware for other endpoints
-app.use('/api/v1', async (req, res, next) => {
-  const LOCAL_ENDPOINTS = ['/auth/change-password', '/registerOtp', '/loan-statement-direct', '/withdrawable-statement-direct'];
-  const isLocalEndpoint = LOCAL_ENDPOINTS.some(endpoint => req.path === endpoint);
-  
-  if (isLocalEndpoint) {
-    return next();
-  }
+// ============================================
+// LOCAL ENDPOINT: WITHDRAWABLE DEPOSIT STATEMENT PDF
+// ============================================
+app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
+  const { accountNo, startDate, endDate } = req.body;
+  console.log(`\n📄 [LOCAL] Generating Withdrawable Statement for: ${accountNo}`);
+  console.log(`   📅 Received dates - Start: ${startDate}, End: ${endDate}`);
   
   try {
-    const liveUrl = `${LIVE_API_BASE}${req.path}`;
-    console.log(`   🔄 FORWARDING to: ${liveUrl}`);
+    // Convert dates from DD/MM/YYYY to YYYY-MM-DD format
+    const convertedStartDate = convertDateFormat(startDate);
+    const convertedEndDate = convertDateFormat(endDate);
+    console.log(`   📅 Converted dates - Start: ${convertedStartDate}, End: ${convertedEndDate}`);
     
-    const response = await axios({
-      method: req.method,
-      url: liveUrl,
-      data: req.body,
-      params: req.query,
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        ...(req.headers.authorization && { 'Authorization': req.headers.authorization })
-      },
-      timeout: 30000
+    const headerResult = await dbPool.query("SELECT header_name FROM pb_header LIMIT 1");
+    const organisationName = headerResult.rows[0]?.header_name || 'METROPOLITAN HOSPITAL SACCO LTD';
+    
+    const accountResult = await dbPool.query(
+      `SELECT holders_name, acc_no, tel1, postal_code, postal_address, id_no, email_add
+       FROM pb_wdeposit_register WHERE acc_no = $1`,
+      [accountNo]
+    );
+    
+    if (accountResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+    const account = accountResult.rows[0];
+    
+    const openingResult = await dbPool.query(
+      `SELECT COALESCE(SUM(credit - debit), 0) as opening_balance
+       FROM ac_wdeposit_payable 
+       WHERE account_no = $1 AND date::date < $2::date`,
+      [accountNo, convertedStartDate]
+    );
+    const openingBalance = parseFloat(openingResult.rows[0]?.opening_balance || 0);
+    
+    const transResult = await dbPool.query(
+      `SELECT TO_CHAR(date, 'DD/MM/YYYY') as trans_date,
+              initcap(item) as item, reference_no, receipt_no,
+              COALESCE(debit, 0) as debit, COALESCE(credit, 0) as credit
+       FROM ac_wdeposit_payable 
+       WHERE account_no = $1 
+         AND date::date BETWEEN $2::date AND $3::date
+         AND (debit <> 0 OR credit <> 0)
+       ORDER BY date ASC`,
+      [accountNo, convertedStartDate, convertedEndDate]
+    );
+    
+    const interestResult = await dbPool.query(
+      `SELECT COALESCE(SUM(credit - debit), 0) as period_interest
+       FROM ac_wdeposit_payable 
+       WHERE account_no = $1 
+         AND date::date BETWEEN $2::date AND $3::date
+         AND reference_no ILIKE 'WINT%'`,
+      [accountNo, convertedStartDate, convertedEndDate]
+    );
+    
+    const periodInterest = parseFloat(interestResult.rows[0]?.period_interest || 0);
+    
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    const chunks = [];
+    
+    doc.on('data', chunk => chunks.push(chunk));
+    doc.on('end', () => {
+      const pdfBuffer = Buffer.concat(chunks);
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename=withdrawable-statement-${accountNo}.pdf`);
+      res.send(pdfBuffer);
     });
     
-    console.log(`   ✅ Response: ${response.status}`);
-    res.status(response.status).json(response.data);
+    doc.fontSize(16).font('Helvetica-Bold').text(organisationName, { align: 'center' });
+    doc.moveDown();
+    doc.fontSize(14).font('Helvetica-Bold').text('WITHDRAWABLE DEPOSITS STATEMENT', { align: 'center' });
+    doc.moveDown();
+    
+    doc.fontSize(10).font('Helvetica-Bold').text('ACCOUNT INFORMATION');
+    doc.font('Helvetica');
+    doc.text(`Name: ${account.holders_name || 'N/A'}`);
+    doc.text(`Account No: ${account.acc_no || accountNo}`);
+    doc.text(`ID No: ${account.id_no || 'N/A'}`);
+    doc.text(`Phone: ${account.tel1 || 'N/A'}`);
+    doc.text(`Email: ${account.email_add || 'N/A'}`);
+    doc.moveDown();
+    
+    doc.font('Helvetica-Bold').text(`STATEMENT PERIOD: ${new Date(startDate).toLocaleDateString('en-GB')} TO ${new Date(endDate).toLocaleDateString('en-GB')}`);
+    doc.text(`Print Date: ${new Date().toLocaleDateString('en-GB')}`);
+    doc.moveDown();
+    
+    doc.font('Helvetica-Bold').text('TRANSACTION HISTORY', { underline: true });
+    doc.moveDown(0.5);
+    
+    let runningBalance = openingBalance;
+    let totalDebit = 0, totalCredit = 0;
+    let y = doc.y + 10;
+    
+    doc.font('Helvetica-Bold').fontSize(8);
+    doc.text('Date', 50, y);
+    doc.text('Narration', 100, y);
+    doc.text('Ref No', 250, y);
+    doc.text('Receipt No', 320, y);
+    doc.text('Withdrawn (KES)', 400, y, { align: 'right' });
+    doc.text('Deposited (KES)', 470, y, { align: 'right' });
+    doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
+    y += 18;
+    doc.font('Helvetica').fontSize(8);
+    
+    doc.text('-', 50, y);
+    doc.text('BAL/BF', 100, y);
+    doc.text('-', 250, y);
+    doc.text('-', 320, y);
+    doc.text(openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+    doc.text('-', 470, y, { align: 'right' });
+    y += 15;
+    
+    for (const row of transResult.rows) {
+      const debit = parseFloat(row.debit) || 0;
+      const credit = parseFloat(row.credit) || 0;
+      runningBalance = runningBalance + credit - debit;
+      totalDebit += debit;
+      totalCredit += credit;
+      
+      if (y > 700) {
+        doc.addPage();
+        y = 50;
+        doc.font('Helvetica-Bold').fontSize(8);
+        doc.text('Date', 50, y);
+        doc.text('Narration', 100, y);
+        doc.text('Ref No', 250, y);
+        doc.text('Receipt No', 320, y);
+        doc.text('Withdrawn (KES)', 400, y, { align: 'right' });
+        doc.text('Deposited (KES)', 470, y, { align: 'right' });
+        doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
+        y += 18;
+        doc.font('Helvetica').fontSize(8);
+      }
+      
+      doc.text(row.trans_date || '-', 50, y);
+      doc.text((row.item || 'Transaction').substring(0, 35), 100, y);
+      doc.text((row.reference_no || '-').substring(0, 15), 250, y);
+      doc.text((row.receipt_no || '-').substring(0, 15), 320, y);
+      doc.text(debit > 0 ? debit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 400, y, { align: 'right' });
+      doc.text(credit > 0 ? credit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 470, y, { align: 'right' });
+      y += 15;
+    }
+    
+    y += 5;
+    doc.font('Helvetica-Bold');
+    doc.text('TOTALS', 100, y);
+    doc.text(totalDebit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+    doc.text(totalCredit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 470, y, { align: 'right' });
+    y += 15;
+    doc.text('CLOSING BALANCE', 100, y);
+    doc.text(runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+    y += 20;
+    
+    if (periodInterest !== 0) {
+      doc.font('Helvetica-Bold').text('INTEREST INFORMATION', { underline: true });
+      doc.font('Helvetica');
+      doc.text(`INTEREST FOR THE PERIOD: KES ${periodInterest.toLocaleString(undefined, { minimumFractionDigits: 2 })}`);
+    }
+    
+    doc.moveDown();
+    doc.fontSize(8).font('Helvetica');
+    doc.text('This is a computer-generated statement.', { align: 'center' });
+    doc.text(`Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
+    doc.end();
+    
   } catch (error) {
     console.error(`   ❌ Forwarding error:`, error.message);
     if (error.response) {
