@@ -73,6 +73,7 @@ dbPool.connect((err, client, release) => {
 });
 
 const LIVE_API_BASE = process.env.LIVE_API_BASE || 'http://192.168.4.6:3023/api/v1';
+const SPRING_API_BASE = process.env.SPRING_API_BASE || 'http://localhost:8080/api/v1';
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -105,12 +106,20 @@ function convertDateFormat(dateStr) {
 // ============================================
 // DEBUG: Clear all OTPs for a member
 // ============================================
+// Endpoints handled by THIS proxy server locally (PDF generation etc.)
 const LOCAL_ENDPOINTS = [
   '/loan-statement-direct', 
   '/withdrawable-statement-direct',
   '/loan/apply',
   '/instant/',
-  '/auth/change-password'  // ← THIS IS THE KEY FIX
+];
+
+// Endpoints that must go to the Spring Boot backend (port 8080)
+const SPRING_ENDPOINTS = [
+  '/auth/change-password',
+  '/auth/registerOtp',
+  '/auth/authenticate',
+  '/auth/register',
 ];
 
 // ============================================
@@ -118,53 +127,98 @@ const LOCAL_ENDPOINTS = [
 // ============================================
 app.use('/api/v1', async (req, res, next) => {
   console.log(`\n🔍 Checking path: ${req.path}`);
-  console.log(`   📍 req.baseUrl: ${req.baseUrl}`);
-  console.log(`   📍 req.path: ${req.path}`);
-  console.log(`   📍 LOCAL_ENDPOINTS:`, LOCAL_ENDPOINTS);
-  
-  // Check if this is a local endpoint
+
+  // Check if this is a locally-handled endpoint (PDF etc.)
   const isLocalEndpoint = LOCAL_ENDPOINTS.some(endpoint => {
     if (endpoint === '/instant/') {
       return req.path.startsWith('/instant/');
     }
     return req.path === endpoint;
   });
-  
-  console.log(`   Is local endpoint? ${isLocalEndpoint}`);
-  
+
   if (isLocalEndpoint) {
-    console.log(`   ✅ Handling locally`);
+    console.log(`   ✅ Handling locally: ${req.path}`);
     return next();
   }
-  
-  // Forward to live server
+
+  // Check if this should go to the Spring Boot backend
+  const isSpringEndpoint = SPRING_ENDPOINTS.some(endpoint => req.path.startsWith(endpoint));
+
+  if (isSpringEndpoint) {
+    console.log(`   🌱 FORWARDING to Spring Boot: ${req.path}`);
+    try {
+      // Map proxy paths to Spring Boot paths
+      let springPath = req.path;
+      if (req.path === '/auth/change-password') {
+        // Frontend POSTs to /auth/change-password, Spring Boot expects PUT /auth/changePassword
+        springPath = '/auth/changePassword';
+      }
+
+      const springUrl = `${SPRING_API_BASE}${springPath}`;
+      console.log(`   🔄 Spring URL: ${springUrl}`);
+
+      // Map request body fields to Spring Boot's ChangePasswordRequest
+      let springBody = req.body;
+      if (req.path === '/auth/change-password') {
+        springBody = {
+          memberNo: req.body.memberNo,
+          otp: parseInt(req.body.otp, 10),
+          password: req.body.newPassword || req.body.password,
+        };
+        console.log(`   📤 Mapped body for Spring Boot:`, springBody);
+      }
+
+      const forwardHeaders = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+      if (req.headers.authorization) {
+        forwardHeaders['Authorization'] = req.headers.authorization;
+      }
+
+      // Spring Boot expects PUT for changePassword
+      const springMethod = req.path === '/auth/change-password' ? 'PUT' : req.method;
+
+      const response = await axios({
+        method: springMethod,
+        url: springUrl,
+        data: springBody,
+        params: req.query,
+        headers: forwardHeaders,
+        timeout: 30000,
+      });
+
+      console.log(`   ✅ Spring Boot response: ${response.status}`);
+      return res.status(response.status).json(response.data);
+    } catch (error) {
+      console.error(`   ❌ Spring Boot error:`, error.message);
+      if (error.response) {
+        return res.status(error.response.status).json(error.response.data);
+      }
+      return res.status(500).json({ error: 'Spring Boot backend unavailable', message: error.message });
+    }
+  }
+
+  // Default: Forward to live remote server
   console.log(`   🔄 FORWARDING to live server: ${req.path}`);
-  
   try {
     const liveUrl = `${LIVE_API_BASE}${req.path}`;
-    console.log(`   🔄 FORWARDING to: ${liveUrl}`);
-    
-    // Build forwarded headers - include cookies and all original headers
+    console.log(`   🔄 Forwarding to: ${liveUrl}`);
+
     const forwardHeaders = {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
     };
-    
-    // Forward Authorization token if present
     if (req.headers.authorization) {
       forwardHeaders['Authorization'] = req.headers.authorization;
     }
-    
-    // Forward cookies (important for Spring Security CSRF/session)
     if (req.headers.cookie) {
       forwardHeaders['Cookie'] = req.headers.cookie;
     }
-    
-    // Forward X-XSRF-TOKEN if present (Spring CSRF token)
     if (req.headers['x-xsrf-token']) {
       forwardHeaders['X-XSRF-TOKEN'] = req.headers['x-xsrf-token'];
     }
-    
+
     const response = await axios({
       method: req.method,
       url: liveUrl,
@@ -172,175 +226,35 @@ app.use('/api/v1', async (req, res, next) => {
       params: req.query,
       headers: forwardHeaders,
       timeout: 30000,
-      withCredentials: true
+      withCredentials: true,
     });
-    
+
     console.log(`   ✅ Response: ${response.status}`);
-    
-    // Forward any Set-Cookie headers from the live server back to the client
     if (response.headers['set-cookie']) {
       res.setHeader('Set-Cookie', response.headers['set-cookie']);
     }
-    
     res.status(response.status).json(response.data);
   } catch (error) {
-    console.error('Clear OTP error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Forwarding error:', error.message);
+    if (error.response) {
+      res.status(error.response.status).json(error.response.data);
+    } else {
+      res.status(500).json({ error: 'Failed to connect to live server', message: error.message });
+    }
   }
 });
 
 // ============================================
 // DEBUG: Check OTPs for a member
 // ============================================
-app.post('/api/v1/auth/change-password', async (req, res) => {
-  console.log('\n🔐 [LOCAL] Password change request:');
-  console.log('   Body:', req.body);
-  
-  const { memberNo, otp, newPassword, confirmPassword } = req.body;
-  
-  // Validate input
-  if (!memberNo || !otp || !newPassword) {
-    return res.status(400).json({ 
-      status: 1, 
-      message: 'Missing required fields: memberNo, otp, or newPassword' 
-    });
-  }
-  
-  if (newPassword !== confirmPassword) {
-    return res.status(400).json({ 
-      status: 1, 
-      message: 'Passwords do not match' 
-    });
-  }
-  
-  try {
-    // First, verify the OTP (you need to implement OTP storage/verification)
-    // For now, we'll skip OTP verification or you can implement it
-    
-    // Hash the new password
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
-    
-    // Update password in your local database
-    // Note: Adjust the table name and column names based on your actual database schema
-    const updateResult = await dbPool.query(
-      `UPDATE pb_share_register 
-       SET password = $1, 
-           updated_at = CURRENT_TIMESTAMP 
-       WHERE acc_no = $2 
-       RETURNING acc_no, holders_name`,
-      [hashedPassword, memberNo]
-    );
-    
-    if (updateResult.rows.length === 0) {
-      return res.status(404).json({ 
-        status: 1, 
-        message: 'Member not found' 
-      });
-    }
-    
-    console.log(`   ✅ Password updated successfully for member: ${memberNo}`);
-    console.log(`   📝 Updated record:`, updateResult.rows[0]);
-    console.log(`   🔍 Hashed password length: ${hashedPassword.length}, starts with: ${hashedPassword.substring(0, 10)}...`);
-    
-    // Return success response (matching the expected format)
-    res.status(200).json({
-      status: 0,  // 0 typically means success in your API
-      message: 'Password changed successfully',
-      memberNo: memberNo,
-      otps_found: result.rows,
-      count: result.rows.length,
-      message: "Use the latest OTP from this list"
-    });
-  } catch (error) {
-    console.error('Check OTP error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
+// NOTE: /api/v1/auth/change-password is now forwarded to Spring Boot via SPRING_ENDPOINTS above.
+// The old local implementation has been removed — Spring Boot handles OTP verification + password update.
 
 // ============================================
 // LOCAL ENDPOINT: REGISTER/SEND OTP
 // ============================================
-app.post('/api/v1/registerOtp', async (req, res) => {
-  const { memberNo } = req.body;
-  
-  console.log(`\n📱 [LOCAL] OTP request for: ${memberNo}`);
-  
-  if (!memberNo || memberNo.trim() === "") {
-    return res.status(400).json({ 
-      success: false, 
-      message: "Enter username" 
-    });
-  }
-  
-  try {
-    // Check if member exists and get phone number
-    const memberCheck = await dbPool.query(
-      `SELECT acc_no, holders_name, tel1 FROM pb_share_register WHERE acc_no = $1`,
-      [memberNo]
-    );
-    
-    if (memberCheck.rows.length === 0) {
-      console.log(`   ❌ Member not found: ${memberNo}`);
-      return res.status(404).json({ 
-        success: false, 
-        message: "Member not found" 
-      });
-    }
-    
-    const member = memberCheck.rows[0];
-    const phoneNumber = member.tel1;
-    
-    console.log(`   ✅ Member found: ${member.holders_name}`);
-    console.log(`   📞 Phone: ${phoneNumber}`);
-    
-    // Generate a random 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000);
-    console.log(`   🔑 Generated OTP: ${otp}`);
-    
-    // First, delete any existing OTP for this user
-    await dbPool.query(
-      `DELETE FROM integration.user_name_otp WHERE "login name" = $1`,
-      [memberNo]
-    );
-    console.log(`   🗑️  Cleared existing OTPs`);
-    
-    // Insert new OTP with exact column names (using double quotes for spaces)
-    const insertResult = await dbPool.query(
-      `INSERT INTO integration.user_name_otp ("login name", passkey, "mobile no", "date", "created at") 
-       VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) 
-       RETURNING id`,
-      [memberNo, otp, phoneNumber]
-    );
-    
-    if (insertResult.rows.length > 0) {
-      console.log(`   📝 Inserted new OTP successfully (ID: ${insertResult.rows[0].id})`);
-    } else {
-      console.log(`   ❌ Failed to insert OTP`);
-      return res.status(500).json({ 
-        success: false, 
-        message: "Failed to save OTP. Please try again." 
-      });
-    }
-    
-    console.log(`   💡 OTP for ${memberNo}: ${otp}`);
-    
-    return res.status(200).json({
-      success: true,
-      message: `OTP sent successfully to ${phoneNumber || 'your phone'}`,
-      otp: otp // Remove this line in production
-    });
-    
-  } catch (error) {
-    console.error(`   ❌ Error:`, error.message);
-    console.error(`   Stack:`, error.stack);
-    return res.status(500).json({ 
-      success: false, 
-      message: "Failed to generate OTP. Please try again.",
-      details: error.message
-    });
-  }
-});
+// NOTE: /api/v1/auth/registerOtp is now forwarded to Spring Boot via SPRING_ENDPOINTS above.
+// Spring Boot's OtpController handles this at POST /api/v1/auth/registerOtp.
 
 // ============================================
 // CHANGE PASSWORD ENDPOINT - Using exact column names with spaces
@@ -707,18 +621,19 @@ app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
 // ============================================
 app.listen(port, '0.0.0.0', () => {
   console.log(`\n${'='.repeat(60)}`);
-  console.log(`🚀 PROXY SERVER RUNNING`);
+  console.log(`🚀 PROXY SERVER RUNNING on port ${port}`);
   console.log(`${'='.repeat(60)}`);
   console.log(`📍 URL: http://localhost:${port}`);
-  console.log(`\n✅ FORWARDING to live server: ${LIVE_API_BASE}`);
-  console.log(`\n✅ LOCAL ENDPOINTS:`);
-  console.log(`   POST   /api/v1/auth/change-password (FIXED - using "login name" and "created at")`);
-  console.log(`   POST   /api/v1/registerOtp`);
+  console.log(`\n🌱 Spring Boot backend: ${SPRING_API_BASE}`);
+  console.log(`🔄 Live remote server:  ${LIVE_API_BASE}`);
+  console.log(`\n✅ SPRING BOOT ENDPOINTS (→ localhost:8080):`);
+  console.log(`   POST   /api/v1/auth/registerOtp  →  POST /api/v1/auth/registerOtp`);
+  console.log(`   POST   /api/v1/auth/change-password  →  PUT /api/v1/auth/changePassword`);
+  console.log(`   POST   /api/v1/auth/authenticate`);
+  console.log(`   POST   /api/v1/auth/register`);
+  console.log(`\n📄 LOCAL ENDPOINTS (handled here):`);
   console.log(`   POST   /api/v1/loan-statement-direct`);
   console.log(`   POST   /api/v1/withdrawable-statement-direct`);
-  console.log(`\n🔍 DEBUG ENDPOINTS:`);
-  console.log(`   GET    /api/v1/debug/check-otp/:memberNo`);
-  console.log(`   DELETE /api/v1/debug/clear-otp/:memberNo`);
   console.log(`\n🧪 TEST ENDPOINT: http://localhost:${port}/api/v1/test`);
   console.log(`${'='.repeat(60)}\n`);
 });

@@ -49,7 +49,7 @@ const ChangePassword = () => {
     setError('');
     
     try {
-      const response = await fetch('http://localhost:3023/api/v1/auth/registerOtp', {
+      const response = await fetch('/api/v1/auth/registerOtp', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -127,7 +127,7 @@ const ChangePassword = () => {
     setLoading(true);
     
     try {
-      const response = await fetch('http://localhost:3023/api/v1/auth/change-password', {
+      const response = await fetch('/api/v1/auth/change-password', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
