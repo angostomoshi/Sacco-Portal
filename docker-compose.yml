@@ -21,7 +21,7 @@ services:
       # You can override these variables when running on the live server
       - DB_HOST=192.168.4.10
       - DB_PORT=5432
-      - DB_NAME=sacco
-      - DB_USER=postgres
-      - DB_PASSWORD=legacy#007
+      - DB_NAME=metrosacco
+      - DB_USER=centre
+      - DB_PASSWORD=centre123
     restart: unless-stopped

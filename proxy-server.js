@@ -37,11 +37,11 @@ app.use((req, res, next) => {
 
 // Database connection
 const dbPool = new Pool({
-  host: '192.168.4.10',
-  port: 5432,
-  database: 'sacco',
-  user: 'postgres',
-  password: 'legacy#007',
+  host: process.env.DB_HOST || '192.168.4.10',
+  port: process.env.DB_PORT || 5432,
+  database: process.env.DB_NAME || 'metrosacco',
+  user: process.env.DB_USER || 'centre',
+  password: process.env.DB_PASSWORD || 'centre123',
   ssl: false,
   connectionTimeoutMillis: 10000,
 });
@@ -54,8 +54,8 @@ dbPool.connect((err) => {
   }
 });
 
-const LIVE_API_BASE = process.env.LIVE_API_BASE || 'http://192.168.4.6:3023/api/v1';
-const SPRING_API_BASE = process.env.SPRING_API_BASE || 'http://localhost:8080/api/v1';
+const LIVE_API_BASE = process.env.LIVE_API_BASE || 'http://192.168.4.10:8080/api/v1';
+const SPRING_API_BASE = process.env.SPRING_API_BASE || 'http://192.168.4.10:8080/api/v1';
 
 // ============================================
 // UTILITY FUNCTIONS
