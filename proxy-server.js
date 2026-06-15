@@ -3,7 +3,6 @@ const cors = require('cors');
 const axios = require('axios');
 const { Pool } = require('pg');
 const PDFDocument = require('pdfkit');
-const bcrypt = require('bcrypt');
 
 const app = express();
 const port = 3023;
@@ -17,18 +16,6 @@ app.use(cors({
 }));
 
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// ============================================
-// TEST ENDPOINT
-// ============================================
-app.get('/api/v1/test', (req, res) => {
-  res.json({ 
-    message: 'Proxy server is working!', 
-    time: new Date().toISOString(),
-    status: 'running'
-  });
-});
 
 // Disable caching
 app.use('/api/v1', (req, res, next) => {
@@ -56,306 +43,159 @@ const dbPool = new Pool({
   user: 'postgres',
   password: 'legacy#007',
   ssl: false,
-  connectionTimeoutMillis: 30000,
-  idleTimeoutMillis: 30000,
-  keepAlive: true,
+  connectionTimeoutMillis: 10000,
 });
 
-// Test database connection
-dbPool.connect((err, client, release) => {
+dbPool.connect((err) => {
   if (err) {
     console.error('❌ Database connection failed:', err.message);
-    console.error('   Please check VPN connection to 192.168.4.10');
   } else {
     console.log('✅ Database connected successfully');
-    release();
   }
 });
 
-const LIVE_API_BASE = process.env.LIVE_API_BASE || 'http://192.168.4.6:3023/api/v1';
+const LIVE_API_BASE = 'https://memberportal.metro-sacco.com/api/v1';
 
 // ============================================
-// UTILITY FUNCTIONS
-// ============================================
-// Convert DD/MM/YYYY format to YYYY-MM-DD for PostgreSQL
-function convertDateFormat(dateStr) {
-  if (!dateStr) return null;
-  
-  // Handle multiple formats
-  if (dateStr.includes('/')) {
-    // DD/MM/YYYY format
-    const [day, month, year] = dateStr.split('/');
-    return `${year}-${month}-${day}`;
-  } else if (dateStr.includes('-') && dateStr.length === 10) {
-    // Already in YYYY-MM-DD or DD-MM-YYYY format - check if it's already correct
-    const parts = dateStr.split('-');
-    if (parts[0].length === 4) {
-      // Already YYYY-MM-DD
-      return dateStr;
-    } else {
-      // DD-MM-YYYY format
-      const [day, month, year] = parts;
-      return `${year}-${month}-${day}`;
-    }
-  }
-  
-  return dateStr;
-}
-
-// ============================================
-// DEBUG: Clear all OTPs for a member
+// LOCAL ENDPOINTS (Handled by this proxy)
 // ============================================
 const LOCAL_ENDPOINTS = [
+  '/auth/change-password',  // Handle password change locally
   '/loan-statement-direct', 
-  '/withdrawable-statement-direct',
-  '/loan/apply',
-  '/instant/',
-  '/auth/change-password'  // ← THIS IS THE KEY FIX
+  '/withdrawable-statement-direct'
 ];
 
 // ============================================
-// FORWARDING MIDDLEWARE
+// MIDDLEWARE: Route requests
 // ============================================
 app.use('/api/v1', async (req, res, next) => {
-  console.log(`\n🔍 Checking path: ${req.path}`);
-  console.log(`   📍 req.baseUrl: ${req.baseUrl}`);
-  console.log(`   📍 req.path: ${req.path}`);
-  console.log(`   📍 LOCAL_ENDPOINTS:`, LOCAL_ENDPOINTS);
-  
   // Check if this is a local endpoint
-  const isLocalEndpoint = LOCAL_ENDPOINTS.some(endpoint => {
-    if (endpoint === '/instant/') {
-      return req.path.startsWith('/instant/');
-    }
-    return req.path === endpoint;
-  });
-  
-  console.log(`   Is local endpoint? ${isLocalEndpoint}`);
+  const isLocalEndpoint = LOCAL_ENDPOINTS.some(endpoint => req.path === endpoint);
   
   if (isLocalEndpoint) {
-    console.log(`   ✅ Handling locally`);
-    return next();
+    return next(); // Handle locally
   }
   
-  // Forward to live server
-  console.log(`   🔄 FORWARDING to live server: ${req.path}`);
-  
+  // Forward all other requests to live server
   try {
     const liveUrl = `${LIVE_API_BASE}${req.path}`;
-    console.log(`   🔄 FORWARDING to: ${liveUrl}`);
-    
-    // Build forwarded headers - include cookies and all original headers
-    const forwardHeaders = {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    };
-    
-    // Forward Authorization token if present
-    if (req.headers.authorization) {
-      forwardHeaders['Authorization'] = req.headers.authorization;
-    }
-    
-    // Forward cookies (important for Spring Security CSRF/session)
-    if (req.headers.cookie) {
-      forwardHeaders['Cookie'] = req.headers.cookie;
-    }
-    
-    // Forward X-XSRF-TOKEN if present (Spring CSRF token)
-    if (req.headers['x-xsrf-token']) {
-      forwardHeaders['X-XSRF-TOKEN'] = req.headers['x-xsrf-token'];
-    }
+    console.log(`   🔄 FORWARDING to live server: ${liveUrl}`);
     
     const response = await axios({
       method: req.method,
       url: liveUrl,
       data: req.body,
       params: req.query,
-      headers: forwardHeaders,
-      timeout: 30000,
-      withCredentials: true
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...(req.headers.authorization && { 'Authorization': req.headers.authorization })
+      },
+      timeout: 30000
     });
     
     console.log(`   ✅ Response: ${response.status}`);
-    
-    // Forward any Set-Cookie headers from the live server back to the client
-    if (response.headers['set-cookie']) {
-      res.setHeader('Set-Cookie', response.headers['set-cookie']);
-    }
-    
     res.status(response.status).json(response.data);
   } catch (error) {
-    console.error('Clear OTP error:', error);
-    res.status(500).json({ error: error.message });
+    console.error(`   ❌ Forwarding error:`, error.message);
+    if (error.response) {
+      console.log(`   📝 Live server responded with: ${error.response.status}`);
+      res.status(error.response.status).json(error.response.data);
+    } else {
+      res.status(500).json({ error: 'Failed to connect to live server', message: error.message });
+    }
   }
 });
 
 // ============================================
-// DEBUG: Check OTPs for a member
+// LOCAL ENDPOINT: CHANGE PASSWORD
 // ============================================
 app.post('/api/v1/auth/change-password', async (req, res) => {
-  console.log('\n🔐 [LOCAL] Password change request:');
-  console.log('   Body:', req.body);
-  
   const { memberNo, otp, newPassword, confirmPassword } = req.body;
   
-  // Validate input
-  if (!memberNo || !otp || !newPassword) {
-    return res.status(400).json({ 
-      status: 1, 
-      message: 'Missing required fields: memberNo, otp, or newPassword' 
-    });
-  }
+  console.log(`\n🔐 [LOCAL] Password change request for: ${memberNo}`);
+  console.log(`   OTP provided: ${otp}`);
+  console.log(`   New password length: ${newPassword?.length}`);
   
+  // Validation
   if (newPassword !== confirmPassword) {
-    return res.status(400).json({ 
-      status: 1, 
-      message: 'Passwords do not match' 
-    });
+    console.log(`   ❌ Passwords do not match`);
+    return res.status(400).json({ success: false, message: 'Passwords do not match' });
+  }
+  
+  if (!otp || otp.length < 4) {
+    console.log(`   ❌ Invalid OTP`);
+    return res.status(400).json({ success: false, message: 'Please enter a valid OTP' });
+  }
+  
+  if (!newPassword || newPassword.length < 4) {
+    console.log(`   ❌ Password too short`);
+    return res.status(400).json({ success: false, message: 'Password must be at least 4 characters' });
   }
   
   try {
-    // First, verify the OTP (you need to implement OTP storage/verification)
-    // For now, we'll skip OTP verification or you can implement it
-    
-    // Hash the new password
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
-    
-    // Update password in your local database
-    // Note: Adjust the table name and column names based on your actual database schema
-    const updateResult = await dbPool.query(
-      `UPDATE pb_share_register 
-       SET password = $1, 
-           updated_at = CURRENT_TIMESTAMP 
-       WHERE acc_no = $2 
-       RETURNING acc_no, holders_name`,
-      [hashedPassword, memberNo]
-    );
-    
-    if (updateResult.rows.length === 0) {
-      return res.status(404).json({ 
-        status: 1, 
-        message: 'Member not found' 
-      });
-    }
-    
-    console.log(`   ✅ Password updated successfully for member: ${memberNo}`);
-    console.log(`   📝 Updated record:`, updateResult.rows[0]);
-    console.log(`   🔍 Hashed password length: ${hashedPassword.length}, starts with: ${hashedPassword.substring(0, 10)}...`);
-    
-    // Return success response (matching the expected format)
-    res.status(200).json({
-      status: 0,  // 0 typically means success in your API
-      message: 'Password changed successfully',
-      memberNo: memberNo,
-      otps_found: result.rows,
-      count: result.rows.length,
-      message: "Use the latest OTP from this list"
-    });
-  } catch (error) {
-    console.error('Check OTP error:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============================================
-// LOCAL ENDPOINT: REGISTER/SEND OTP
-// ============================================
-app.post('/api/v1/registerOtp', async (req, res) => {
-  const { memberNo } = req.body;
-  
-  console.log(`\n📱 [LOCAL] OTP request for: ${memberNo}`);
-  
-  if (!memberNo || memberNo.trim() === "") {
-    return res.status(400).json({ 
-      success: false, 
-      message: "Enter username" 
-    });
-  }
-  
-  try {
-    // Check if member exists and get phone number
+    // Check if member exists
+    console.log(`   📊 Checking if member exists...`);
     const memberCheck = await dbPool.query(
-      `SELECT acc_no, holders_name, tel1 FROM pb_share_register WHERE acc_no = $1`,
+      `SELECT acc_no, holders_name FROM pb_share_register WHERE acc_no = $1`, 
       [memberNo]
     );
     
     if (memberCheck.rows.length === 0) {
       console.log(`   ❌ Member not found: ${memberNo}`);
-      return res.status(404).json({ 
-        success: false, 
-        message: "Member not found" 
-      });
+      return res.status(404).json({ success: false, message: 'Member not found.' });
     }
     
-    const member = memberCheck.rows[0];
-    const phoneNumber = member.tel1;
+    console.log(`   ✅ Member found: ${memberCheck.rows[0].holders_name}`);
     
-    console.log(`   ✅ Member found: ${member.holders_name}`);
-    console.log(`   📞 Phone: ${phoneNumber}`);
+    // Check what columns exist in the table
+    const columns = await dbPool.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'pb_share_register' 
+      AND column_name IN ('pass', 'password', 'pwd', 'member_password', 'login_password')
+    `);
     
-    // Generate a random 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000);
-    console.log(`   🔑 Generated OTP: ${otp}`);
-    
-    // First, delete any existing OTP for this user
-    await dbPool.query(
-      `DELETE FROM integration.user_name_otp WHERE "login name" = $1`,
-      [memberNo]
-    );
-    console.log(`   🗑️  Cleared existing OTPs`);
-    
-    // Insert new OTP with exact column names (using double quotes for spaces)
-    const insertResult = await dbPool.query(
-      `INSERT INTO integration.user_name_otp ("login name", passkey, "mobile no", "date", "created at") 
-       VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) 
-       RETURNING id`,
-      [memberNo, otp, phoneNumber]
-    );
-    
-    if (insertResult.rows.length > 0) {
-      console.log(`   📝 Inserted new OTP successfully (ID: ${insertResult.rows[0].id})`);
+    let passwordColumn = 'pass'; // default
+    if (columns.rows.length > 0) {
+      passwordColumn = columns.rows[0].column_name;
+      console.log(`   📝 Found password column: ${passwordColumn}`);
     } else {
-      console.log(`   ❌ Failed to insert OTP`);
-      return res.status(500).json({ 
-        success: false, 
-        message: "Failed to save OTP. Please try again." 
-      });
+      console.log(`   ⚠️ No password column found, using 'pass' as default`);
     }
     
-    console.log(`   💡 OTP for ${memberNo}: ${otp}`);
+    // Update the password
+    console.log(`   💾 Updating password...`);
+    const updateQuery = `UPDATE pb_share_register SET "${passwordColumn}" = $1 WHERE acc_no = $2`;
+    const result = await dbPool.query(updateQuery, [newPassword, memberNo]);
+    
+    console.log(`   ✅ Password updated successfully for ${memberNo}!`);
+    console.log(`   📊 Rows affected: ${result.rowCount}`);
     
     return res.status(200).json({
       success: true,
-      message: `OTP sent successfully to ${phoneNumber || 'your phone'}`,
-      otp: otp // Remove this line in production
+      message: 'Password changed successfully! You can now login with your new password.'
     });
     
-  } catch (error) {
-    console.error(`   ❌ Error:`, error.message);
-    console.error(`   Stack:`, error.stack);
+  } catch (dbError) {
+    console.error(`   ❌ Database error:`, dbError.message);
+    console.error(`   📝 Full error:`, dbError);
     return res.status(500).json({ 
       success: false, 
-      message: "Failed to generate OTP. Please try again.",
-      details: error.message
+      message: 'Failed to change password. Please try again later.',
+      error: dbError.message
     });
   }
 });
 
 // ============================================
-// CHANGE PASSWORD ENDPOINT - Using exact column names with spaces
+// LOCAL ENDPOINT: LOAN STATEMENT PDF
 // ============================================
 app.post('/api/v1/loan-statement-direct', async (req, res) => {
   const { loanNo, memberNo, startDate, endDate } = req.body;
   console.log(`\n📄 [LOCAL] Generating PDF for Loan: ${loanNo}`);
-  console.log(`   📅 Received dates - Start: ${startDate}, End: ${endDate}`);
   
   try {
-    // Convert dates from DD/MM/YYYY to YYYY-MM-DD format
-    const convertedStartDate = convertDateFormat(startDate);
-    const convertedEndDate = convertDateFormat(endDate);
-    console.log(`   📅 Converted dates - Start: ${convertedStartDate}, End: ${convertedEndDate}`);
-    
     const headerResult = await dbPool.query("SELECT header_name FROM pb_header LIMIT 1");
     const organisationName = headerResult.rows[0]?.header_name || 'METROPOLITAN HOSPITAL SACCO LTD';
     
@@ -385,7 +225,7 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
       `SELECT COALESCE(SUM(balance - credit_bal), 0) as opening_balance
        FROM ac_debtors 
        WHERE account_no = $1 AND invoice_no = $2 AND date::date < $3::date`,
-      [memberNo, loanNo, convertedStartDate]
+      [memberNo, loanNo, startDate]
     );
     const openingBalance = parseFloat(openingResult.rows[0]?.opening_balance || 0);
     
@@ -398,7 +238,7 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
          AND date::date BETWEEN $3::date AND $4::date
          AND (balance <> 0 OR credit_bal <> 0)
        ORDER BY date ASC`,
-      [memberNo, loanNo, convertedStartDate, convertedEndDate]
+      [memberNo, loanNo, startDate, endDate]
     );
     
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
@@ -412,6 +252,7 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
       res.send(pdfBuffer);
     });
     
+    // Generate PDF
     doc.fontSize(16).font('Helvetica-Bold').text(organisationName, { align: 'center' });
     doc.moveDown();
     doc.fontSize(14).font('Helvetica-Bold').text('LOAN STATEMENT', { align: 'center' });
@@ -521,14 +362,8 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
 app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
   const { accountNo, startDate, endDate } = req.body;
   console.log(`\n📄 [LOCAL] Generating Withdrawable Statement for: ${accountNo}`);
-  console.log(`   📅 Received dates - Start: ${startDate}, End: ${endDate}`);
   
   try {
-    // Convert dates from DD/MM/YYYY to YYYY-MM-DD format
-    const convertedStartDate = convertDateFormat(startDate);
-    const convertedEndDate = convertDateFormat(endDate);
-    console.log(`   📅 Converted dates - Start: ${convertedStartDate}, End: ${convertedEndDate}`);
-    
     const headerResult = await dbPool.query("SELECT header_name FROM pb_header LIMIT 1");
     const organisationName = headerResult.rows[0]?.header_name || 'METROPOLITAN HOSPITAL SACCO LTD';
     
@@ -547,7 +382,7 @@ app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
       `SELECT COALESCE(SUM(credit - debit), 0) as opening_balance
        FROM ac_wdeposit_payable 
        WHERE account_no = $1 AND date::date < $2::date`,
-      [accountNo, convertedStartDate]
+      [accountNo, startDate]
     );
     const openingBalance = parseFloat(openingResult.rows[0]?.opening_balance || 0);
     
@@ -560,7 +395,7 @@ app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
          AND date::date BETWEEN $2::date AND $3::date
          AND (debit <> 0 OR credit <> 0)
        ORDER BY date ASC`,
-      [accountNo, convertedStartDate, convertedEndDate]
+      [accountNo, startDate, endDate]
     );
     
     const interestResult = await dbPool.query(
@@ -569,7 +404,7 @@ app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
        WHERE account_no = $1 
          AND date::date BETWEEN $2::date AND $3::date
          AND reference_no ILIKE 'WINT%'`,
-      [accountNo, convertedStartDate, convertedEndDate]
+      [accountNo, startDate, endDate]
     );
     
     const periodInterest = parseFloat(interestResult.rows[0]?.period_interest || 0);
@@ -683,24 +518,10 @@ app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
     doc.end();
     
   } catch (error) {
-    console.error(`   ❌ Forwarding error:`, error.message);
-    if (error.response) {
-      res.status(error.response.status).json(error.response.data);
-    } else {
-      res.status(500).json({ error: 'Failed to connect to live server', message: error.message });
-    }
+    console.error('   ❌ Error:', error.message);
+    res.status(500).json({ error: error.message });
   }
 });
-
-// ============================================
-// LOCAL ENDPOINT: LOAN STATEMENT PDF (Keep your existing code)
-// ============================================
-// ... (your existing loan-statement-direct endpoint)
-
-// ============================================
-// LOCAL ENDPOINT: WITHDRAWABLE DEPOSIT STATEMENT PDF (Keep your existing code)
-// ============================================
-// ... (your existing withdrawable-statement-direct endpoint)
 
 // ============================================
 // Start the server
@@ -711,14 +532,14 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`${'='.repeat(60)}`);
   console.log(`📍 URL: http://localhost:${port}`);
   console.log(`\n✅ FORWARDING to live server: ${LIVE_API_BASE}`);
-  console.log(`\n✅ LOCAL ENDPOINTS:`);
-  console.log(`   POST   /api/v1/auth/change-password (FIXED - using "login name" and "created at")`);
-  console.log(`   POST   /api/v1/registerOtp`);
+  console.log(`   All /api/v1/* requests will be forwarded EXCEPT:`);
+  console.log(`\n✅ LOCAL ENDPOINTS (handled by this proxy):`);
+  console.log(`   POST   /api/v1/auth/change-password (Direct DB Update)`);
   console.log(`   POST   /api/v1/loan-statement-direct`);
   console.log(`   POST   /api/v1/withdrawable-statement-direct`);
-  console.log(`\n🔍 DEBUG ENDPOINTS:`);
-  console.log(`   GET    /api/v1/debug/check-otp/:memberNo`);
-  console.log(`   DELETE /api/v1/debug/clear-otp/:memberNo`);
-  console.log(`\n🧪 TEST ENDPOINT: http://localhost:${port}/api/v1/test`);
+  console.log(`\n📝 Your React components keep their API calls as is:`);
+  console.log(`   OTP sending → forwarded to live server (works!)`);
+  console.log(`   Password change → handled locally (updates database directly)`);
+  console.log(`   PDF generation → handled locally`);
   console.log(`${'='.repeat(60)}\n`);
 });

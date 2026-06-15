@@ -1,4 +1,4 @@
-// LoanStatement.js - With proper API response handling, date formatting (no time), improved PDF handling
+// LoanStatement.js - Matches Java backend: HAVING sum(balance-credit_bal) <> 0
 import React, { useRef, useState, useEffect } from 'react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
@@ -7,6 +7,7 @@ function LoanStatement() {
   const reportRef = useRef();
   const [memberData, setMemberData] = useState(null);
   const [loanData, setLoanData] = useState([]);
+  const [allLoansRaw, setAllLoansRaw] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [headerData, setHeaderData] = useState(null);
@@ -18,37 +19,34 @@ function LoanStatement() {
   
   const brandColor = '#00a3b5';
 
- // Replace the formatDateOnly function with this version:
-const formatDateOnly = (dateString) => {
-  if (!dateString) return 'N/A';
-  try {
-    // Extract just the date part from ISO string (YYYY-MM-DD)
-    if (dateString.includes('T')) {
-      const datePart = dateString.split('T')[0]; // Gets "2026-06-04"
-      const [year, month, day] = datePart.split('-');
-      return `${day}/${month}/${year}`; // Returns "04/06/2026"
+  // Format date only (no time)
+  const formatDateOnly = (dateString) => {
+    if (!dateString) return 'N/A';
+    try {
+      if (dateString.includes('T')) {
+        const datePart = dateString.split('T')[0];
+        const [year, month, day] = datePart.split('-');
+        return `${day}/${month}/${year}`;
+      }
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return dateString;
+      return date.toLocaleDateString('en-GB');
+    } catch {
+      return dateString;
     }
-    
-    // For other formats, try normal parsing
-    const date = new Date(dateString);
-    if (isNaN(date.getTime())) return dateString;
-    return date.toLocaleDateString('en-GB');
-  } catch {
-    return dateString;
-  }
-};
+  };
 
-  // Process loan data from API response
+  // Process loan data - EXACTLY matches Java: HAVING sum(balance-credit_bal) <> 0
   const processLoanData = (responseData) => {
-    console.log('Processing API response:', responseData);
+    console.log('=== Processing Loan Data ===');
+    console.log('Raw API Response:', responseData);
     
     let loans = [];
     
-    // Handle the actual API response structure: { success: true, data: [...], source: "local", count: 17 }
+    // Extract loans array from response
     if (responseData && responseData.success === true && Array.isArray(responseData.data)) {
       loans = responseData.data;
     } 
-    // Fallback for other possible structures
     else if (Array.isArray(responseData)) {
       loans = responseData;
     } 
@@ -65,10 +63,35 @@ const formatDateOnly = (dateString) => {
       loans = [responseData];
     }
     
-    console.log('Extracted loans array:', loans);
+    console.log(`Total loans received from API: ${loans.length}`);
+    setAllLoansRaw(loans);
     
-    // Format the loans for display
-    const formattedLoans = loans.map((item, index) => ({
+    // Log each loan's details for debugging
+    loans.forEach((loan, idx) => {
+      console.log(`Loan ${idx + 1}: ${loan.loanNo} | Outstanding: ${loan.outStanding} | Amount: ${loan.amount}`);
+    });
+    
+    // CRITICAL FILTER: Only loans with outstanding > 0
+    // Matches Java: HAVING sum(balance-credit_bal) <> 0
+    const activeLoans = loans.filter(loan => {
+      const outstanding = parseFloat(loan.outStanding);
+      const isActive = outstanding !== 0 && outstanding > 0;
+      
+      if (!isActive) {
+        console.log(`❌ FILTERED OUT (Completed): ${loan.loanNo} - Outstanding: ${outstanding}`);
+      } else {
+        console.log(`✅ KEEP (Active): ${loan.loanNo} - Outstanding: ${outstanding}`);
+      }
+      
+      return isActive;
+    });
+    
+    console.log(`\n=== RESULTS ===`);
+    console.log(`Active loans (outstanding > 0): ${activeLoans.length}`);
+    console.log(`Completed loans filtered out: ${loans.length - activeLoans.length}`);
+    
+    // Format active loans for display
+    const formattedLoans = activeLoans.map((item, index) => ({
       id: index,
       loanNo: item.loanNo || 'N/A',
       purpose: item.loanPurpose || 'N/A',
@@ -79,8 +102,16 @@ const formatDateOnly = (dateString) => {
       balance: parseFloat(item.outStanding) || 0,
     }));
     
-    console.log('Formatted loans:', formattedLoans);
     setLoanData(formattedLoans);
+    
+    // Set appropriate message
+    if (formattedLoans.length === 0 && loans.length > 0) {
+      setError(`✓ No active loans found. All ${loans.length} loan(s) have been fully repaid (outstanding balance = 0).`);
+    } else if (loans.length === 0) {
+      setError('No loan records found in the system.');
+    } else {
+      setError('');
+    }
   };
 
   // Fetch header config
@@ -112,7 +143,6 @@ const formatDateOnly = (dateString) => {
     setStatementLoading(true);
     setShowModal(true);
     
-    // Clear previous PDF URL and blob
     if (pdfUrl) {
       URL.revokeObjectURL(pdfUrl);
       setPdfUrl(null);
@@ -271,7 +301,7 @@ const formatDateOnly = (dateString) => {
           console.error('Error fetching member data:', err);
         }
         
-        // Fetch loan data from instant endpoint
+        // Fetch loan data
         const instantUrl = `/api/v1/instant/${memberNumber}`;
         console.log('Fetching from:', instantUrl);
         
@@ -282,19 +312,10 @@ const formatDateOnly = (dateString) => {
         
         if (instantResponse.ok) {
           const instantData = await instantResponse.json();
-          console.log('RAW API RESPONSE:', JSON.stringify(instantData, null, 2));
-          
-          if (instantData && instantData.data && instantData.data.length > 0) {
-            processLoanData(instantData);
-          } else if (Array.isArray(instantData) && instantData.length > 0) {
-            processLoanData({ success: true, data: instantData });
-          } else {
-            setError('No loan records found');
-            setLoanData([]);
-          }
+          processLoanData(instantData);
         } else {
           console.error('Failed to fetch instant loans:', instantResponse.status);
-          setError('Unable to fetch loan data.');
+          setError('Unable to fetch loan data. Please try again later.');
           setLoanData([]);
         }
         
@@ -315,7 +336,7 @@ const formatDateOnly = (dateString) => {
     };
   }, []);
 
-  // Calculate totals
+  // Calculate totals for active loans only
   const totalLoanAmount = loanData.reduce((sum, loan) => sum + (loan.originalAmount || 0), 0);
   const totalOutstanding = loanData.reduce((sum, loan) => sum + (loan.balance || 0), 0);
 
@@ -323,7 +344,7 @@ const formatDateOnly = (dateString) => {
     return (
       <div className="loading-container">
         <div className="loading-spinner"></div>
-        <p>Loading loan information...</p>
+        <p>Loading active loan information...</p>
         <style>{`
           .loading-container { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 400px; background: white; border-radius: 12px; padding: 2rem; }
           .loading-spinner { width: 50px; height: 50px; border: 4px solid #e2e8f0; border-top-color: ${brandColor}; border-radius: 50%; animation: spin 1s linear infinite; }
@@ -338,7 +359,23 @@ const formatDateOnly = (dateString) => {
       <div ref={reportRef} className="report-container">
         <div className="report-header">
           <h1>{headerData?.organisationName || 'METROPOLITAN HOSPITAL SACCO LTD'}</h1>
-          <p>Member Loan Statement</p>
+          <p>Member Loan Statement Summary</p>
+          <p style={{ fontSize: '0.8rem', color: '#666' }}>
+            {loanData.length > 0 ? (
+              <>Showing <strong>{loanData.length}</strong> active loan(s) with outstanding balance &gt; 0</>
+            ) : (
+              <>No active loans with outstanding balance</>
+            )}
+            {allLoansRaw.length > 0 && (
+              <span style={{ marginLeft: '10px', fontSize: '0.7rem' }}>
+                (Total loans: {allLoansRaw.length} | 
+                Completed: {allLoansRaw.length - loanData.length})
+              </span>
+            )}
+          </p>
+          <p style={{ fontSize: '0.7rem', fontStyle: 'italic', color: '#666' }}>
+            Matches Java backend: HAVING SUM(balance - credit_bal) &lt;&gt; 0
+          </p>
           {headerData && (
             <div className="contact-info">
               <small>{headerData.boxNo || ''} {headerData.postalCode ? `| ${headerData.postalCode}` : ''}</small>
@@ -385,7 +422,7 @@ const formatDateOnly = (dateString) => {
                   <th>End Date</th>
                   <th>Period (Months)</th>
                   <th>Principal (KES)</th>
-                  <th>Balance (KES)</th>
+                  <th>Outstanding Balance (KES)</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -398,7 +435,9 @@ const formatDateOnly = (dateString) => {
                     <td data-label="End Date">{loan.edate}</td>
                     <td data-label="Period">{loan.period}</td>
                     <td data-label="Principal" className="amount"><strong>{formatCurrency(loan.originalAmount)}</strong></td>
-                    <td data-label="Balance" className="amount"><strong>{formatCurrency(loan.balance)}</strong></td>
+                    <td data-label="Outstanding Balance" className="amount" style={{ color: '#e53e3e', fontWeight: 'bold' }}>
+                      {formatCurrency(loan.balance)}
+                    </td>
                     <td data-label="Action" className="action-cell">
                       <button 
                         className="view-stmt-btn"
@@ -410,13 +449,19 @@ const formatDateOnly = (dateString) => {
                     </td>
                   </tr>
                 )) : (
-                  <tr><td colSpan="8" style={{ textAlign: 'center', padding: '2rem' }}>No loan records found</td></tr>
+                  <tr>
+                    <td colSpan="8" style={{ textAlign: 'center', padding: '2rem' }}>
+                      <div style={{ color: '#38a169' }}>
+                        ✓ {error || 'All loans have been fully repaid. No active loans found.'}
+                      </div>
+                    </td>
+                  </tr>
                 )}
               </tbody>
               {loanData.length > 0 && (
                 <tfoot>
                   <tr className="total-row">
-                    <td colSpan="5"><strong>TOTAL</strong></td>
+                    <td colSpan="5"><strong>TOTAL ACTIVE LOANS</strong></td>
                     <td className="amount"><strong>{formatCurrency(totalLoanAmount)}</strong></td>
                     <td className="amount"><strong>{formatCurrency(totalOutstanding)}</strong></td>
                     <td></td>
@@ -428,7 +473,8 @@ const formatDateOnly = (dateString) => {
         </div>
 
         <div className="report-footer">
-          <p><strong>Note:</strong> This is a summary of your loan portfolio.</p>
+          <p><strong>Note:</strong> This statement shows only active loans where outstanding balance is not equal to 0 (not fully repaid).</p>
+          <p>Java SQL Logic: <strong>HAVING SUM(balance - credit_bal) &lt;&gt; 0</strong></p>
           <p>For any queries, please contact the Sacco office.</p>
         </div>
       </div>
@@ -438,8 +484,6 @@ const formatDateOnly = (dateString) => {
           📄 Download PDF Summary
         </button>
       </div>
-
-      {error && <div className="error-message">{error}</div>}
 
       {/* Modal for displaying PDF statement */}
       {showModal && (
@@ -453,7 +497,7 @@ const formatDateOnly = (dateString) => {
               {statementLoading ? (
                 <div className="modal-loading">
                   <div className="loading-spinner-small"></div>
-                  <p>Generating statement...</p>
+                  <p>Generating detailed loan statement...</p>
                 </div>
               ) : pdfUrl ? (
                 <iframe
@@ -689,14 +733,6 @@ const formatDateOnly = (dateString) => {
           justify-content: center;
           height: 100%;
           color: #e53e3e;
-        }
-        
-        .error-message {
-          margin-top: 1rem;
-          padding: 0.75rem;
-          background: #fed7d7;
-          border-left: 4px solid #e53e3e;
-          color: #742a2a;
         }
         
         .action-cell {
