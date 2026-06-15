@@ -49,7 +49,7 @@ const ChangePassword = () => {
     setError('');
     
     try {
-      const response = await fetch('http://localhost:3023/api/v1/auth/registerOtp', {
+      const response = await fetch('/api/v1/auth/registerOtp', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -88,86 +88,85 @@ const ChangePassword = () => {
     setLoading(false);
   };
 
-  // In ChangePassword.jsx, update just this function:
-const handleChangePassword = async (e) => {
-  e.preventDefault();
-  setError('');
-  
-  // Validation (keep your existing validation)
-  if (!formData.memberNo.trim()) {
-    setError('Please enter Member Number');
-    return;
-  }
-  
-  if (!formData.otp.trim()) {
-    setError('Please enter OTP');
-    return;
-  }
-  
-  if (formData.otp.trim().length < 4) {
-    setError('OTP must be at least 4 digits');
-    return;
-  }
-  
-  if (!formData.password.trim()) {
-    setError('Please enter new password');
-    return;
-  }
-  
-  if (formData.password.length < 4) {
-    setError('Password must be at least 4 characters long');
-    return;
-  }
-  
-  if (formData.password !== formData.confirmPassword) {
-    setError('Passwords do not match');
-    return;
-  }
-  
-  setLoading(true);
-  
-  try {
-    // CHANGES HERE:
-    const response = await fetch('http://localhost:3023/api/v1/auth/changePassword', { // Note: changePassword (capital P)
-      method: 'PUT', // Changed from POST to PUT
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        memberNo: formData.memberNo.trim(),
-        otp: parseInt(formData.otp.trim()), // Convert to integer
-        password: formData.password // Changed from newPassword to password
-        // Removed confirmPassword - Java doesn't need it
-      })
-    });
+  // Change password
+  const handleChangePassword = async (e) => {
+    e.preventDefault();
+    setError('');
     
-    const data = await response.json();
+    // Validation
+    if (!formData.memberNo.trim()) {
+      setError('Please enter Member Number');
+      return;
+    }
     
-    if (response.ok) {
-      setSuccess(data.message || 'Password changed successfully! Redirecting to login...');
-      
-      // Clear form
-      setFormData({
-        memberNo: '',
-        otp: '',
-        password: '',
-        confirmPassword: ''
+    if (!formData.otp.trim()) {
+      setError('Please enter OTP');
+      return;
+    }
+    
+    if (formData.otp.trim().length < 4) {
+      setError('OTP must be at least 4 digits');
+      return;
+    }
+    
+    if (!formData.password.trim()) {
+      setError('Please enter new password');
+      return;
+    }
+    
+    if (formData.password.length < 4) {
+      setError('Password must be at least 4 characters long');
+      return;
+    }
+    
+    if (formData.password !== formData.confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
+    
+    setLoading(true);
+    
+    try {
+      const response = await fetch('/api/v1/auth/change-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          memberNo: formData.memberNo.trim(),
+          otp: formData.otp.trim(),
+          newPassword: formData.password,
+          confirmPassword: formData.confirmPassword
+        })
       });
       
-      // Redirect to login after 2 seconds
-      setTimeout(() => {
-        navigate('/login');
-      }, 2000);
-    } else {
-      setError(data.message || 'Failed to change password. Please check your OTP and try again.');
+      const data = await response.json();
+      
+      if (response.ok) {
+        setSuccess(data.message || 'Password changed successfully! Redirecting to login...');
+        
+        // Clear form
+        setFormData({
+          memberNo: '',
+          otp: '',
+          password: '',
+          confirmPassword: ''
+        });
+        
+        // Redirect to login after 2 seconds
+        setTimeout(() => {
+          navigate('/login');
+        }, 2000);
+      } else {
+        setError(data.message || 'Failed to change password. Please check your OTP and try again.');
+      }
+    } catch (err) {
+      console.error('Error changing password:', err);
+      setError('Unable to connect to server. Please try again.');
     }
-  } catch (err) {
-    console.error('Error changing password:', err);
-    setError('Unable to connect to server. Please try again.');
-  }
-  
-  setLoading(false);
-};
+    
+    setLoading(false);
+  };
 
   return (
     <div style={styles.container}>
