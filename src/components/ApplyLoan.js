@@ -188,14 +188,14 @@ function ApplyLoan() {
       console.log('Response status:', response.status);
       console.log('Response data:', result);
       
-      if (response.ok && result.success) {
+      if (response.ok) {
         // Save to localStorage as backup
         const existingApplications = JSON.parse(localStorage.getItem('loanApplications') || '[]');
         existingApplications.push({
           ...loanApplication,
           id: Date.now(),
-          applicationId: result.loanNumber || `IL${Date.now()}`,
-          loanNumber: result.loanNumber,
+          applicationId: result.loanNumber || result.loanNo || `IL${Date.now()}`,
+          loanNumber: result.loanNumber || result.loanNo,
           submittedAt: new Date().toISOString()
         });
         localStorage.setItem('loanApplications', JSON.stringify(existingApplications));

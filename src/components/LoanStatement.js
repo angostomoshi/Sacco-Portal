@@ -97,9 +97,13 @@ function LoanStatement() {
       purpose: item.loanPurpose || 'N/A',
       sdate: formatDateOnly(item.startDate),
       edate: formatDateOnly(item.endDate),
+      rawStartDate: item.startDate || null,
+      rawEndDate: item.endDate || null,
       period: item.period !== null && item.period !== undefined ? item.period : 'N/A',
       originalAmount: parseFloat(item.amount) || 0,
       balance: parseFloat(item.outStanding) || 0,
+      status: item.status || (item.isPending ? 'Pending Approval' : 'Active'),
+      isPending: Boolean(item.isPending),
     }));
     
     setLoanData(formattedLoans);
@@ -164,8 +168,14 @@ function LoanStatement() {
         body: JSON.stringify({
           loanNo: loan.loanNo,
           memberNo: memberNumber,
-          startDate: loan.sdate,
-          endDate: loan.edate
+          startDate: loan.rawStartDate || loan.sdate,
+          endDate: loan.rawEndDate || loan.edate,
+          principalAmount: loan.originalAmount,
+          outstandingBalance: loan.balance,
+          purpose: loan.purpose,
+          period: loan.period,
+          status: loan.status,
+          isPending: loan.isPending,
         })
       });
       
@@ -312,11 +322,53 @@ function LoanStatement() {
         
         if (instantResponse.ok) {
           const instantData = await instantResponse.json();
-          processLoanData(instantData);
+
+          let pendingData = { data: [] };
+          try {
+            const pendingResponse = await fetch(`/api/v1/loan-applications/${memberNumber}`, {
+              method: 'GET',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
+            });
+
+            if (pendingResponse.ok) {
+              pendingData = await pendingResponse.json();
+            }
+          } catch (pendingErr) {
+            console.error('Error fetching pending loans:', pendingErr);
+          }
+
+          const activeLoans = Array.isArray(instantData?.data)
+            ? instantData.data
+            : Array.isArray(instantData)
+              ? instantData
+              : [];
+
+          const pendingLoans = Array.isArray(pendingData?.data) ? pendingData.data : [];
+
+          processLoanData({
+            data: [...activeLoans, ...pendingLoans]
+          });
         } else {
           console.error('Failed to fetch instant loans:', instantResponse.status);
-          setError('Unable to fetch loan data. Please try again later.');
-          setLoanData([]);
+
+          try {
+            const pendingResponse = await fetch(`/api/v1/loan-applications/${memberNumber}`, {
+              method: 'GET',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
+            });
+
+            if (pendingResponse.ok) {
+              const pendingData = await pendingResponse.json();
+              processLoanData(pendingData);
+            } else {
+              setError('Unable to fetch loan data. Please try again later.');
+              setLoanData([]);
+            }
+          } catch (pendingErr) {
+            console.error('Failed to fetch pending loans:', pendingErr);
+            setError('Unable to fetch loan data. Please try again later.');
+            setLoanData([]);
+          }
         }
         
       } catch (err) {
@@ -360,22 +412,6 @@ function LoanStatement() {
         <div className="report-header">
           <h1>{headerData?.organisationName || 'METROPOLITAN HOSPITAL SACCO LTD'}</h1>
           <p>Member Loan Statement Summary</p>
-          <p style={{ fontSize: '0.8rem', color: '#666' }}>
-            {loanData.length > 0 ? (
-              <>Showing <strong>{loanData.length}</strong> active loan(s) with outstanding balance &gt; 0</>
-            ) : (
-              <>No active loans with outstanding balance</>
-            )}
-            {allLoansRaw.length > 0 && (
-              <span style={{ marginLeft: '10px', fontSize: '0.7rem' }}>
-                (Total loans: {allLoansRaw.length} | 
-                Completed: {allLoansRaw.length - loanData.length})
-              </span>
-            )}
-          </p>
-          <p style={{ fontSize: '0.7rem', fontStyle: 'italic', color: '#666' }}>
-            Matches Java backend: HAVING SUM(balance - credit_bal) &lt;&gt; 0
-          </p>
           {headerData && (
             <div className="contact-info">
               <small>{headerData.boxNo || ''} {headerData.postalCode ? `| ${headerData.postalCode}` : ''}</small>
@@ -423,6 +459,7 @@ function LoanStatement() {
                   <th>Period (Months)</th>
                   <th>Principal (KES)</th>
                   <th>Outstanding Balance (KES)</th>
+                  <th>Status</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -438,13 +475,16 @@ function LoanStatement() {
                     <td data-label="Outstanding Balance" className="amount" style={{ color: '#e53e3e', fontWeight: 'bold' }}>
                       {formatCurrency(loan.balance)}
                     </td>
+                    <td data-label="Status">
+                      {loan.isPending ? 'Pending Approval' : 'Active'}
+                    </td>
                     <td data-label="Action" className="action-cell">
                       <button 
                         className="view-stmt-btn"
                         onClick={() => handleViewStatement(loan)}
                         style={{ backgroundColor: brandColor }}
                       >
-                        View Statement
+                        {loan.isPending ? 'View Summary' : 'View Statement'}
                       </button>
                     </td>
                   </tr>
@@ -490,7 +530,7 @@ function LoanStatement() {
         <div className="modal-overlay" onClick={handleCloseModal}>
           <div className="modal-container" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>Loan Statement - {selectedLoan?.loanNo}</h2>
+              <h2>{selectedLoan?.isPending ? 'Loan Application Summary' : 'Loan Statement'} - {selectedLoan?.loanNo}</h2>
               <button className="modal-close" onClick={handleCloseModal}>×</button>
             </div>
             <div className="modal-body">
@@ -502,7 +542,7 @@ function LoanStatement() {
               ) : pdfUrl ? (
                 <iframe
                   src={`${pdfUrl}#toolbar=1&navpanes=1&scrollbar=1&view=FitH`}
-                  title={`Loan Statement ${selectedLoan?.loanNo}`}
+                  title={`${selectedLoan?.isPending ? 'Loan Application Summary' : 'Loan Statement'} ${selectedLoan?.loanNo}`}
                   className="pdf-viewer"
                   frameBorder="0"
                 />

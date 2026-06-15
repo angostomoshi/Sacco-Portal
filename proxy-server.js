@@ -3,6 +3,7 @@ const cors = require('cors');
 const axios = require('axios');
 const { Pool } = require('pg');
 const PDFDocument = require('pdfkit');
+const nodemailer = require('nodemailer');
 
 const app = express();
 const port = 3023;
@@ -85,24 +86,101 @@ function convertDateFormat(dateStr) {
   return dateStr;
 }
 
+function normalizeProtocol(protocols) {
+  return String(protocols || '').trim().toUpperCase();
+}
+
+async function getEmailServerSettings() {
+  const result = await dbPool.query(
+    `SELECT smtp_host,
+            smpt_port,
+            smtp_username,
+            smtp_password,
+            protocols,
+            require_auth,
+            smtp_debug,
+            default_sender,
+            company_id,
+            sender_type
+     FROM pb_emailserver_settings
+     ORDER BY
+       CASE
+         WHEN lower(coalesce(default_sender, '')) = 'sacco@metro-hospital.com' THEN 0
+         WHEN lower(coalesce(smtp_username, '')) = 'sacco@metro-hospital.com' THEN 1
+         WHEN lower(coalesce(sender_type, '')) = 'general' THEN 2
+         ELSE 3
+       END,
+       company_id NULLS LAST`
+  );
+
+  if (result.rows.length === 0) {
+    throw new Error('SMTP settings not configured');
+  }
+
+  return result.rows[0];
+}
+
+async function sendOtpEmail({ recipientEmail, recipientName, memberNo, otpCode }) {
+  const emailSettings = await getEmailServerSettings();
+  const protocol = normalizeProtocol(emailSettings.protocols);
+  const port = Number(emailSettings.smpt_port || 587);
+  const secure = port === 465;
+
+  const transport = nodemailer.createTransport({
+    host: emailSettings.smtp_host,
+    port,
+    secure,
+    requireTLS: !secure && (protocol.includes('TLS') || protocol.includes('START')),
+    auth: emailSettings.require_auth ? {
+      user: emailSettings.smtp_username,
+      pass: emailSettings.smtp_password,
+    } : undefined,
+    logger: Boolean(emailSettings.smtp_debug),
+    debug: Boolean(emailSettings.smtp_debug),
+  });
+
+  const sender = emailSettings.default_sender || emailSettings.smtp_username;
+  const name = recipientName || 'Member';
+
+  return transport.sendMail({
+    from: sender,
+    to: recipientEmail,
+    subject: 'Metro Sacco Password Reset OTP',
+    text: `Hello ${name},\n\nYour Metro Sacco password reset OTP is ${otpCode}.\nUse this code to change your password for member number ${memberNo}.\n\nIf you did not request this OTP, please ignore this email.\n\nMetro Sacco`,
+    html: `
+      <div style="font-family: Arial, sans-serif; color: #1f2937; line-height: 1.5;">
+        <p>Hello ${name},</p>
+        <p>Your Metro Sacco password reset OTP is:</p>
+        <p style="font-size: 24px; font-weight: 700; letter-spacing: 4px;">${otpCode}</p>
+        <p>Use this code to change your password for member number <strong>${memberNo}</strong>.</p>
+        <p>If you did not request this OTP, you can ignore this email.</p>
+        <p>Metro Sacco</p>
+      </div>
+    `,
+  });
+}
+
 // ============================================
 // DEBUG: Clear all OTPs for a member
 // ============================================
 // Endpoints handled by THIS proxy server locally (PDF generation etc.)
 const LOCAL_ENDPOINTS = [
-  '/auth/change-password',  // Handle password change locally
+  '/auth/registerOtp',
   '/loan-statement-direct', 
   '/withdrawable-statement-direct',
-  '/loan/apply',
+];
+
+const LOCAL_ENDPOINT_PREFIXES = [
   '/instant/',
+  '/loan-applications/',
 ];
 
 // Endpoints that must go to the Spring Boot backend (port 8080)
 const SPRING_ENDPOINTS = [
   '/auth/change-password',
-  '/auth/registerOtp',
   '/auth/authenticate',
   '/auth/register',
+  '/loan/apply',
 ];
 
 // ============================================
@@ -112,12 +190,9 @@ app.use('/api/v1', async (req, res, next) => {
   console.log(`\n🔍 Checking path: ${req.path}`);
 
   // Check if this is a locally-handled endpoint (PDF etc.)
-  const isLocalEndpoint = LOCAL_ENDPOINTS.some(endpoint => {
-    if (endpoint === '/instant/') {
-      return req.path.startsWith('/instant/');
-    }
-    return req.path === endpoint;
-  });
+  const isLocalEndpoint =
+    LOCAL_ENDPOINTS.some(endpoint => req.path === endpoint) ||
+    LOCAL_ENDPOINT_PREFIXES.some(prefix => req.path.startsWith(prefix));
 
   if (isLocalEndpoint) {
     console.log(`   ✅ Handling locally: ${req.path}`);
@@ -135,6 +210,8 @@ app.use('/api/v1', async (req, res, next) => {
       if (req.path === '/auth/change-password') {
         // Frontend POSTs to /auth/change-password, Spring Boot expects PUT /auth/changePassword
         springPath = '/auth/changePassword';
+      } else if (req.path === '/loan/apply') {
+        springPath = '/instant/register';
       }
 
       const springUrl = `${SPRING_API_BASE}${springPath}`;
@@ -149,6 +226,19 @@ app.use('/api/v1', async (req, res, next) => {
           password: req.body.newPassword || req.body.password,
         };
         console.log(`   📤 Mapped body for Spring Boot:`, springBody);
+      }
+
+      if (req.path === '/loan/apply') {
+        springBody = {
+          memNo: req.body.memberNo,
+          memberName: req.body.memberName,
+          amount: req.body.loanAmount,
+          period: req.body.periodMonths,
+          repayment: req.body.monthlyDeduction,
+          total: req.body.totalAmount,
+          interest: req.body.interestAmount,
+        };
+        console.log(`   Mapped loan application body for Spring Boot:`, springBody);
       }
 
       const forwardHeaders = {
@@ -236,30 +326,228 @@ app.use('/api/v1', async (req, res, next) => {
 // ============================================
 // LOCAL ENDPOINT: REGISTER/SEND OTP
 // ============================================
-// NOTE: /api/v1/auth/registerOtp is now forwarded to Spring Boot via SPRING_ENDPOINTS above.
-// Spring Boot's OtpController handles this at POST /api/v1/auth/registerOtp.
+app.post('/api/v1/auth/registerOtp', async (req, res) => {
+  const memberNo = String(req.body?.memberNo || '').trim();
+  console.log(`\n📧 [LOCAL] Sending password reset OTP for: ${memberNo}`);
+
+  if (!memberNo) {
+    return res.status(400).json({ message: 'Member number is required.' });
+  }
+
+  try {
+    const memberResult = await dbPool.query(
+      `SELECT u.member_no,
+              COALESCE(NULLIF(m.email_add, ''), NULLIF(u.email, '')) AS email,
+              COALESCE(NULLIF(m.holders_name, ''), u.member_no) AS member_name,
+              m.tel1
+       FROM pb_users u
+       LEFT JOIN pb_share_register m ON m.acc_no = u.member_no
+       WHERE u.member_no = $1`,
+      [memberNo]
+    );
+
+    if (memberResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Portal account not found for that member number.' });
+    }
+
+    const member = memberResult.rows[0];
+    if (!member.email) {
+      return res.status(400).json({ message: 'No email address is registered for this member account.' });
+    }
+
+    await dbPool.query(
+      `UPDATE pb_sacco_passkey
+       SET key_used = true
+       WHERE member_no = $1
+         AND logged_in = true
+         AND key_used = false`,
+      [memberNo]
+    );
+
+    const insertResult = await dbPool.query(
+      `INSERT INTO pb_sacco_passkey (member_no, phone_no, email, logged_in, sms_sent, key_used)
+       VALUES ($1, $2, $3, true, false, false)
+       RETURNING id, pass_key, cdate`,
+      [memberNo, member.tel1 || null, member.email]
+    );
+
+    const otpRecord = insertResult.rows[0];
+
+    try {
+      await sendOtpEmail({
+        recipientEmail: member.email,
+        recipientName: member.member_name,
+        memberNo,
+        otpCode: otpRecord.pass_key,
+      });
+    } catch (emailError) {
+      await dbPool.query(`UPDATE pb_sacco_passkey SET key_used = true WHERE id = $1`, [otpRecord.id]);
+      console.error('❌ Failed to send OTP email:', emailError.message);
+      return res.status(500).json({
+        message: 'Failed to send OTP email. Please try again.',
+      });
+    }
+
+    return res.status(201).json({
+      memberNo,
+      email: member.email,
+      message: `OTP sent successfully to ${member.email}. Please check your email.`,
+      sentAt: otpRecord.cdate,
+    });
+  } catch (error) {
+    console.error('❌ OTP email flow failed:', error.message);
+    return res.status(500).json({
+      message: 'Unable to send OTP right now. Please try again later.',
+    });
+  }
+});
+
+// ============================================
+// LOCAL ENDPOINT: ACTIVE INSTANT LOANS
+// ============================================
+app.get('/api/v1/instant/:memberNo', async (req, res) => {
+  const { memberNo } = req.params;
+  console.log(`\n📘 [LOCAL] Fetching active instant loans for: ${memberNo}`);
+
+  try {
+    const activeLoanResult = await dbPool.query(
+      `SELECT loan_no AS "loanNo",
+              initcap(lpurpose) AS "loanPurpose",
+              cdate AS "startDate",
+              edate AS "endDate",
+              period,
+              amount,
+              SUM(balance - credit_bal) AS "outStanding"
+       FROM ac_debtors, pb_saccoloan
+       WHERE mem_no = account_no
+         AND invoice_no = loan_no
+         AND account_no = $1
+       GROUP BY loan_no, lpurpose, amount, cdate, edate, period
+       HAVING SUM(balance - credit_bal) <> 0
+       ORDER BY cdate`,
+      [memberNo]
+    );
+
+    if (activeLoanResult.rows.length === 0) {
+      return res.json({
+        status: 404,
+        message: 'Could not fetch data',
+        data: null,
+      });
+    }
+
+    return res.json({
+      status: 200,
+      message: 'OK',
+      data: activeLoanResult.rows,
+    });
+  } catch (error) {
+    console.error('❌ Failed to fetch active instant loans:', error.message);
+    return res.status(500).json({
+      error: 'Failed to fetch active instant loans',
+      message: error.message,
+    });
+  }
+});
+
+// ============================================
+// LOCAL ENDPOINT: PENDING LOAN APPLICATIONS
+// ============================================
+app.get('/api/v1/loan-applications/:memberNo', async (req, res) => {
+  const { memberNo } = req.params;
+  console.log(`\n📋 [LOCAL] Fetching pending loan applications for: ${memberNo}`);
+
+  try {
+    const pendingResult = await dbPool.query(
+      `SELECT loan_no AS "loanNo",
+              initcap(lpurpose) AS "loanPurpose",
+              cdate AS "startDate",
+              edate AS "endDate",
+              period,
+              amount,
+              total,
+              repayment,
+              interest,
+              COALESCE(total, amount, 0) AS "outStanding",
+              true AS "isPending",
+              'Pending Approval' AS status
+       FROM pb_saccoloan1
+       WHERE mem_no = $1
+         AND COALESCE(processed, false) = false
+       ORDER BY cdate DESC, id DESC`,
+      [memberNo]
+    );
+
+    return res.json({
+      success: true,
+      data: pendingResult.rows,
+    });
+  } catch (error) {
+    console.error('❌ Failed to fetch pending loan applications:', error.message);
+    return res.status(500).json({
+      error: 'Failed to fetch pending loan applications',
+      message: error.message,
+    });
+  }
+});
 
 // ============================================
 // LOCAL ENDPOINT: LOAN STATEMENT PDF
 // ============================================
 app.post('/api/v1/loan-statement-direct', async (req, res) => {
-  const { loanNo, memberNo, startDate, endDate } = req.body;
+  const {
+    loanNo,
+    memberNo,
+    startDate,
+    endDate,
+    principalAmount,
+    outstandingBalance,
+    purpose: requestedPurpose,
+    period: requestedPeriod,
+    status: requestedStatus,
+    isPending: requestedIsPending,
+  } = req.body;
   console.log(`\n📄 [LOCAL] Generating PDF for Loan: ${loanNo}`);
   
   try {
     const headerResult = await dbPool.query("SELECT header_name FROM pb_header LIMIT 1");
     const organisationName = headerResult.rows[0]?.header_name || 'METROPOLITAN HOSPITAL SACCO LTD';
     
-    const loanResult = await dbPool.query(
+    let loanResult = await dbPool.query(
       `SELECT lpurpose as purpose, amount, cdate as start_date, edate as end_date, period, interest
        FROM pb_saccoloan WHERE loan_no = $1`,
       [loanNo]
     );
-    
+
+    let isPendingApplication = false;
+    if (loanResult.rows.length === 0) {
+      loanResult = await dbPool.query(
+        `SELECT lpurpose as purpose,
+                amount,
+                cdate as start_date,
+                edate as end_date,
+                period,
+                interest,
+                repayment,
+                total
+         FROM pb_saccoloan1
+         WHERE loan_no = $1`,
+        [loanNo]
+      );
+      isPendingApplication = loanResult.rows.length > 0;
+    }
+
     if (loanResult.rows.length === 0) {
       return res.status(404).json({ error: 'Loan not found' });
     }
     const loan = loanResult.rows[0];
+    const normalizedStartDate = convertDateFormat(startDate) || loan.start_date;
+    const normalizedEndDate = convertDateFormat(endDate) || loan.end_date;
+    const displayPrincipal = parseFloat(principalAmount ?? loan.amount ?? 0) || 0;
+    const displayOutstanding = parseFloat(outstandingBalance ?? loan.total ?? loan.amount ?? 0) || 0;
+    const displayPurpose = requestedPurpose || loan.purpose || 'N/A';
+    const displayPeriod = requestedPeriod ?? loan.period ?? 0;
+    const displayStatus = requestedStatus || (requestedIsPending || isPendingApplication ? 'Pending Approval' : 'Active');
     
     const memberResult = await dbPool.query(
       `SELECT holders_name, id_no, tel1, email_add, acc_no 
@@ -272,25 +560,30 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
     }
     const member = memberResult.rows[0];
     
-    const openingResult = await dbPool.query(
-      `SELECT COALESCE(SUM(balance - credit_bal), 0) as opening_balance
-       FROM ac_debtors 
-       WHERE account_no = $1 AND invoice_no = $2 AND date::date < $3::date`,
-      [memberNo, loanNo, startDate]
-    );
-    const openingBalance = parseFloat(openingResult.rows[0]?.opening_balance || 0);
-    
-    const transResult = await dbPool.query(
-      `SELECT TO_CHAR(date, 'DD/MM/YYYY') as trans_date,
-              initcap(item) as item, reference_no, receipt_no,
-              COALESCE(balance, 0) as debit, COALESCE(credit_bal, 0) as credit
-       FROM ac_debtors 
-       WHERE account_no = $1 AND invoice_no = $2
-         AND date::date BETWEEN $3::date AND $4::date
-         AND (balance <> 0 OR credit_bal <> 0)
-       ORDER BY date ASC`,
-      [memberNo, loanNo, startDate, endDate]
-    );
+    let openingBalance = 0;
+    let transResult = { rows: [] };
+
+    if (!isPendingApplication) {
+      const openingResult = await dbPool.query(
+        `SELECT COALESCE(SUM(balance - credit_bal), 0) as opening_balance
+         FROM ac_debtors 
+         WHERE account_no = $1 AND invoice_no = $2 AND date::date < $3::date`,
+        [memberNo, loanNo, normalizedStartDate]
+      );
+      openingBalance = parseFloat(openingResult.rows[0]?.opening_balance || 0);
+
+      transResult = await dbPool.query(
+        `SELECT TO_CHAR(date, 'DD/MM/YYYY') as trans_date,
+                initcap(item) as item, reference_no, receipt_no,
+                COALESCE(balance, 0) as debit, COALESCE(credit_bal, 0) as credit
+         FROM ac_debtors 
+         WHERE account_no = $1 AND invoice_no = $2
+           AND date::date BETWEEN $3::date AND $4::date
+           AND (balance <> 0 OR credit_bal <> 0)
+         ORDER BY date ASC`,
+        [memberNo, loanNo, normalizedStartDate, normalizedEndDate]
+      );
+    }
     
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
     const chunks = [];
@@ -306,7 +599,10 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
     // Generate PDF
     doc.fontSize(16).font('Helvetica-Bold').text(organisationName, { align: 'center' });
     doc.moveDown();
-    doc.fontSize(14).font('Helvetica-Bold').text('LOAN STATEMENT', { align: 'center' });
+    doc
+      .fontSize(14)
+      .font('Helvetica-Bold')
+      .text(isPendingApplication ? 'LOAN APPLICATION SUMMARY' : 'LOAN STATEMENT', { align: 'center' });
     doc.moveDown();
     
     doc.fontSize(10).font('Helvetica-Bold').text('MEMBER INFORMATION');
@@ -321,79 +617,93 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
     doc.font('Helvetica-Bold').text('LOAN INFORMATION');
     doc.font('Helvetica');
     doc.text(`Loan Number: ${loanNo}`);
-    doc.text(`Purpose: ${loan.purpose || 'N/A'}`);
-    doc.text(`Amount: KES ${parseFloat(loan.amount || 0).toLocaleString()}`);
+    doc.text(`Purpose: ${displayPurpose}`);
+    doc.text(`Principal Amount: KES ${displayPrincipal.toLocaleString(undefined, { minimumFractionDigits: 2 })}`);
+    doc.text(`Outstanding Balance: KES ${displayOutstanding.toLocaleString(undefined, { minimumFractionDigits: 2 })}`);
     doc.text(`Interest Rate: ${loan.interest || 0}%`);
-    doc.text(`Period: ${loan.period || 0} months`);
+    doc.text(`Period: ${displayPeriod || 0} months`);
     doc.text(`Start Date: ${loan.start_date ? new Date(loan.start_date).toLocaleDateString('en-GB') : 'N/A'}`);
     doc.text(`End Date: ${loan.end_date ? new Date(loan.end_date).toLocaleDateString('en-GB') : 'N/A'}`);
-    doc.moveDown();
-    
-    doc.font('Helvetica-Bold').text('TRANSACTION HISTORY', { underline: true });
-    doc.moveDown(0.5);
-    
-    let runningBalance = openingBalance;
-    let totalDebit = 0, totalCredit = 0;
-    let y = doc.y + 10;
-    
-    doc.font('Helvetica-Bold').fontSize(8);
-    doc.text('Date', 50, y);
-    doc.text('Description', 100, y);
-    doc.text('Ref No', 250, y);
-    doc.text('Receipt No', 320, y);
-    doc.text('Debit (KES)', 400, y, { align: 'right' });
-    doc.text('Credit (KES)', 470, y, { align: 'right' });
-    doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
-    y += 18;
-    doc.font('Helvetica').fontSize(8);
-    
-    doc.text('-', 50, y);
-    doc.text('OPENING BALANCE', 100, y);
-    doc.text('-', 250, y);
-    doc.text('-', 320, y);
-    doc.text(openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
-    doc.text('-', 470, y, { align: 'right' });
-    y += 15;
-    
-    for (const row of transResult.rows) {
-      const debit = parseFloat(row.debit) || 0;
-      const credit = parseFloat(row.credit) || 0;
-      runningBalance = runningBalance + debit - credit;
-      totalDebit += debit;
-      totalCredit += credit;
-      
-      if (y > 700) {
-        doc.addPage();
-        y = 50;
-        doc.font('Helvetica-Bold').fontSize(8);
-        doc.text('Date', 50, y);
-        doc.text('Description', 100, y);
-        doc.text('Ref No', 250, y);
-        doc.text('Receipt No', 320, y);
-        doc.text('Debit (KES)', 400, y, { align: 'right' });
-        doc.text('Credit (KES)', 470, y, { align: 'right' });
-        doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
-        y += 18;
-        doc.font('Helvetica').fontSize(8);
-      }
-      
-      doc.text(row.trans_date || '-', 50, y);
-      doc.text((row.item || 'Transaction').substring(0, 30), 100, y);
-      doc.text((row.reference_no || '-').substring(0, 15), 250, y);
-      doc.text((row.receipt_no || '-').substring(0, 15), 320, y);
-      doc.text(debit > 0 ? debit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 400, y, { align: 'right' });
-      doc.text(credit > 0 ? credit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 470, y, { align: 'right' });
-      y += 15;
+    doc.text(`Status: ${displayStatus}`);
+    if (isPendingApplication) {
+      doc.text(`Expected Monthly Repayment: KES ${parseFloat(loan.repayment || 0).toLocaleString()}`);
+      doc.text(`Total Repayable: KES ${parseFloat(loan.total || 0).toLocaleString()}`);
     }
-    
-    y += 5;
-    doc.font('Helvetica-Bold');
-    doc.text('TOTALS', 100, y);
-    doc.text(totalDebit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
-    doc.text(totalCredit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 470, y, { align: 'right' });
-    y += 15;
-    doc.text('CLOSING BALANCE', 100, y);
-    doc.text(runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+    doc.moveDown();
+
+    if (isPendingApplication) {
+      doc.font('Helvetica-Bold').text('APPLICATION STATUS', { underline: true });
+      doc.moveDown(0.5);
+      doc.font('Helvetica').fontSize(10);
+      doc.text('This loan was created successfully and is still pending approval/posting.');
+      doc.text('A full transactional loan statement becomes available after the loan is posted to the live loan ledger.');
+    } else {
+      doc.font('Helvetica-Bold').text('TRANSACTION HISTORY', { underline: true });
+      doc.moveDown(0.5);
+
+      let runningBalance = openingBalance;
+      let totalDebit = 0, totalCredit = 0;
+      let y = doc.y + 10;
+
+      doc.font('Helvetica-Bold').fontSize(8);
+      doc.text('Date', 50, y);
+      doc.text('Description', 100, y);
+      doc.text('Ref No', 250, y);
+      doc.text('Receipt No', 320, y);
+      doc.text('Debit (KES)', 400, y, { align: 'right' });
+      doc.text('Credit (KES)', 470, y, { align: 'right' });
+      doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
+      y += 18;
+      doc.font('Helvetica').fontSize(8);
+
+      doc.text('-', 50, y);
+      doc.text('OPENING BALANCE', 100, y);
+      doc.text('-', 250, y);
+      doc.text('-', 320, y);
+      doc.text(openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+      doc.text('-', 470, y, { align: 'right' });
+      y += 15;
+
+      for (const row of transResult.rows) {
+        const debit = parseFloat(row.debit) || 0;
+        const credit = parseFloat(row.credit) || 0;
+        runningBalance = runningBalance + debit - credit;
+        totalDebit += debit;
+        totalCredit += credit;
+
+        if (y > 700) {
+          doc.addPage();
+          y = 50;
+          doc.font('Helvetica-Bold').fontSize(8);
+          doc.text('Date', 50, y);
+          doc.text('Description', 100, y);
+          doc.text('Ref No', 250, y);
+          doc.text('Receipt No', 320, y);
+          doc.text('Debit (KES)', 400, y, { align: 'right' });
+          doc.text('Credit (KES)', 470, y, { align: 'right' });
+          doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
+          y += 18;
+          doc.font('Helvetica').fontSize(8);
+        }
+
+        doc.text(row.trans_date || '-', 50, y);
+        doc.text((row.item || 'Transaction').substring(0, 30), 100, y);
+        doc.text((row.reference_no || '-').substring(0, 15), 250, y);
+        doc.text((row.receipt_no || '-').substring(0, 15), 320, y);
+        doc.text(debit > 0 ? debit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 400, y, { align: 'right' });
+        doc.text(credit > 0 ? credit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 470, y, { align: 'right' });
+        y += 15;
+      }
+
+      y += 5;
+      doc.font('Helvetica-Bold');
+      doc.text('TOTALS', 100, y);
+      doc.text(totalDebit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+      doc.text(totalCredit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 470, y, { align: 'right' });
+      y += 15;
+      doc.text('CLOSING BALANCE', 100, y);
+      doc.text(runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+    }
     
     doc.moveDown();
     doc.fontSize(8).font('Helvetica');

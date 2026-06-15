@@ -63,7 +63,7 @@ const ChangePassword = () => {
       
       if (response.ok) {
         setOtpSent(true);
-        setSuccess(data.message || 'OTP sent successfully! Please check your phone.');
+        setSuccess(data.message || 'OTP sent successfully! Please check your email.');
         
         // Start countdown for resend
         setCountdown(60);
@@ -78,7 +78,7 @@ const ChangePassword = () => {
         }, 1000);
         
       } else {
-        setError(data.message || 'Failed to send OTP. Please try again.');
+        setError(data.message || 'Failed to send OTP email. Please try again.');
       }
     } catch (err) {
       console.error('Error sending OTP:', err);
