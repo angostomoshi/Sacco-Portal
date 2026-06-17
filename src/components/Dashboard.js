@@ -5,14 +5,7 @@ import Alert from './Alert';
 
 const Dashboard = ({ userData }) => {
   const navigate = useNavigate();
-  const [metrics, setMetrics] = useState(() => readStoredJson('dashboardMetrics', {
-    savings: 0,
-    shareCapital: 0,
-    dividend: 0,
-    loanBalance: 0,
-    loading: true,
-    notice: ''
-  }));
+  const [metrics, setMetrics] = useState(() => readDashboardMetrics());
   const [profile, setProfile] = useState(() => {
     const passedProfile = userData && Object.keys(userData).length ? userData : null;
     return passedProfile || readStoredJson('memberProfile', readStoredJson('memberData', {}));
@@ -60,9 +53,9 @@ const Dashboard = ({ userData }) => {
         const savings = extractTotal(await responseJson(savingsResponse));
         const shareCapital = extractTotal(await responseJson(shareCapitalResponse));
         const payableDividend = extractTotal(await responseJson(dividendResponse));
-        const transactionDividend = extractDividendTotal(await responseJson(dividendTransactionsResponse));
+        const transactionDividend = extractDividendNetTotal(await responseJson(dividendTransactionsResponse));
         const cachedDividend = extractCachedDividendTotal();
-        const dividend = payableDividend || transactionDividend || cachedDividend;
+        const dividend = transactionDividend ?? cachedDividend ?? payableDividend;
         const loanBalance = extractLoanBalance([
           await responseJson(activeLoansResponse),
           await responseJson(pendingLoansResponse)
@@ -85,7 +78,10 @@ const Dashboard = ({ userData }) => {
         };
 
         setMetrics(nextMetrics);
-        localStorage.setItem('dashboardMetrics', JSON.stringify(nextMetrics));
+        localStorage.setItem('dashboardMetrics', JSON.stringify({
+          ...nextMetrics,
+          cacheVersion: DASHBOARD_METRICS_CACHE_VERSION
+        }));
       } catch (error) {
         console.error('Error loading dashboard metrics:', error);
         if (!mounted) return;
@@ -240,6 +236,8 @@ const Dashboard = ({ userData }) => {
   );
 };
 
+const DASHBOARD_METRICS_CACHE_VERSION = 2;
+
 const readStoredJson = (key, fallback) => {
   try {
     const value = localStorage.getItem(key);
@@ -247,6 +245,25 @@ const readStoredJson = (key, fallback) => {
   } catch {
     return fallback;
   }
+};
+
+const readDashboardMetrics = () => {
+  const fallback = {
+    savings: 0,
+    shareCapital: 0,
+    dividend: 0,
+    loanBalance: 0,
+    loading: true,
+    notice: ''
+  };
+  const cached = readStoredJson('dashboardMetrics', fallback);
+
+  if (cached.cacheVersion !== DASHBOARD_METRICS_CACHE_VERSION) {
+    localStorage.removeItem('dashboardMetrics');
+    return fallback;
+  }
+
+  return cached;
 };
 
 const MetricCard = ({ card, loading, onClick }) => {
@@ -301,22 +318,42 @@ const extractTotal = (data) => {
   return Number(found || 0);
 };
 
-const extractDividendTotal = (data) => {
-  if (!data) return 0;
+const extractDividendNetTotal = (data) => {
+  if (!data) return null;
   if (typeof data === 'number') return data;
-
-  const directTotal = extractTotal(data);
-  if (directTotal) return directTotal;
-
+  if (data.totals?.netDividend !== undefined) return Number(data.totals.netDividend || 0);
+  if (data.netDividend !== undefined) return Number(data.netDividend || 0);
+  if (data.netAmount !== undefined) return Number(data.netAmount || 0);
+  if (data.runningTotal !== undefined) return Number(data.runningTotal || 0);
+  if (data.balance !== undefined && !Array.isArray(data.data)) return Number(data.balance || 0);
+  
   const transactions = Array.isArray(data)
     ? data
     : data.dividends || data.transactions || data.data || data.records || [];
 
-  if (!Array.isArray(transactions)) return 0;
+  if (!Array.isArray(transactions) || transactions.length === 0) return null;
+
+  const lastWithBalance = [...transactions].reverse().find((item) => (
+    item?.runningTotal !== undefined ||
+    item?.runningAmt !== undefined ||
+    item?.netAmount !== undefined ||
+    item?.balance !== undefined
+  ));
+
+  if (lastWithBalance) {
+    return Number(
+      lastWithBalance.runningTotal ??
+      lastWithBalance.runningAmt ??
+      lastWithBalance.netAmount ??
+      lastWithBalance.balance ??
+      0
+    );
+  }
 
   return transactions.reduce((sum, item) => {
     const amount = Number(item?.dividend || item?.dividendAmount || item?.amount || item?.credit || 0);
-    return sum + amount;
+    const paid = Number(item?.paid || item?.withholdingTax || item?.tax || item?.debit || 0);
+    return sum + amount - paid;
   }, 0);
 };
 
@@ -324,29 +361,71 @@ const extractCachedDividendTotal = () => {
   const cached = readStoredJson('dividendTransactions', null);
   if (!cached) return 0;
 
-  if (cached.totals?.totalDividends) return Number(cached.totals.totalDividends);
-  if (cached.totals?.netDividend) return Number(cached.totals.netDividend);
+  if (cached.totals?.netDividend !== undefined) return Number(cached.totals.netDividend || 0);
+  if (cached.netDividend !== undefined) return Number(cached.netDividend || 0);
 
-  return extractDividendTotal(cached.transactions || cached);
+  return extractDividendNetTotal(cached.transactions || cached);
 };
 
 const extractLoanBalance = (responses) => {
-  return responses.reduce((sum, response) => {
-    if (!response) return sum;
+  const [activeResponse, pendingResponse] = responses;
+  const activeLoans = extractLoanRows(activeResponse);
+  const pendingLoans = extractLoanRows(pendingResponse);
+  const activeLoanNumbers = new Set(
+    activeLoans
+      .map((loan) => normalizeLoanNumber(loan?.loanNo || loan?.loan_no || loan?.loanNumber))
+      .filter(Boolean)
+  );
 
-    const loans = Array.isArray(response)
-      ? response
-      : Array.isArray(response.data)
-        ? response.data
-        : Array.isArray(response.loans)
-          ? response.loans
-          : [];
-
-    return sum + loans.reduce((loanSum, loan) => {
-      const balance = loan?.outStanding ?? loan?.outstandingBalance ?? loan?.balance ?? loan?.total ?? loan?.amount ?? 0;
-      return loanSum + Number(balance || 0);
-    }, 0);
+  const activeTotal = activeLoans.reduce((sum, loan) => {
+    const outstanding = getLoanOutstanding(loan);
+    return outstanding > 0 ? sum + outstanding : sum;
   }, 0);
+  const pendingTotal = pendingLoans.reduce((sum, loan) => {
+    const loanNumber = normalizeLoanNumber(loan?.loanNo || loan?.loan_no || loan?.loanNumber);
+    if (loanNumber && activeLoanNumbers.has(loanNumber)) return sum;
+    const outstanding = getLoanOutstanding(loan);
+    return outstanding > 0 ? sum + outstanding : sum;
+  }, 0);
+
+  return activeTotal + pendingTotal;
+};
+
+const extractLoanRows = (response) => {
+  if (!response) return [];
+  if (Array.isArray(response)) return response;
+  if (Array.isArray(response.data)) return response.data;
+  if (Array.isArray(response.loans)) return response.loans;
+  if (Array.isArray(response.instant)) return response.instant;
+  return [];
+};
+
+const normalizeLoanNumber = (loanNumber) => String(loanNumber || '').trim().toUpperCase();
+
+const getLoanOutstanding = (loan) => {
+  const candidates = [
+    loan?.outStanding,
+    loan?.outstanding,
+    loan?.outstandingBalance,
+    loan?.outstanding_balance,
+    loan?.outstandingAmount,
+    loan?.outstanding_amount,
+    loan?.outStandingAmount,
+    loan?.out_standing,
+    loan?.total,
+    loan?.amount,
+    loan?.balance,
+  ];
+
+  const found = candidates.find((value) => value !== undefined && value !== null && value !== '');
+  return parseMoney(found);
+};
+
+const parseMoney = (value) => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const cleaned = String(value || '').replace(/,/g, '').trim();
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
 };
 
 const formatCurrency = (amount) => {

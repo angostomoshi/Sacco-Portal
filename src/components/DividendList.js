@@ -51,11 +51,20 @@ function DividendList() {
     // Calculate totals
     const totalDiv = formattedTransactions.reduce((sum, t) => sum + t.dividend, 0);
     const totalPaid = formattedTransactions.reduce((sum, t) => sum + t.paid, 0);
-    setTotals({
+    const finalRunningAmount = formattedTransactions.length > 0
+      ? formattedTransactions[formattedTransactions.length - 1].runningAmt
+      : totalDiv - totalPaid;
+    const nextTotals = {
       totalDividends: totalDiv,
       totalPaid: totalPaid,
-      netDividend: totalDiv - totalPaid
-    });
+      netDividend: finalRunningAmount
+    };
+
+    setTotals(nextTotals);
+    localStorage.setItem('dividendTransactions', JSON.stringify({
+      transactions: formattedTransactions,
+      totals: nextTotals
+    }));
   };
 
   // Function to load demo data as fallback
@@ -219,11 +228,6 @@ function DividendList() {
             console.log('Dividend data received:', dividendData);
             processDividendData(dividendData);
             
-            // Cache the transactions
-            const currentTransactions = dividendTransactions.length > 0 ? 
-              { transactions: dividendTransactions, totals: totals } : 
-              { transactions: [], totals: { totalDividends: 0, totalPaid: 0, netDividend: 0 } };
-            localStorage.setItem('dividendTransactions', JSON.stringify(currentTransactions));
           } else {
             const errorText = await dividendResponse.text();
             console.error(`Dividend endpoint returned ${dividendResponse.status}:`, errorText);

@@ -270,10 +270,10 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
     }
 
     // ── Admin notification email ──────────────────────────────────────────
-    const ADMIN_EMAIL = 'sacco@metro-hospital.com';
+    const ADMIN_EMAILS = ['sacco@metro-hospital.com', 'pwawerun@gmail.com'];
     await transport.sendMail({
       from: sender,
-      to: ADMIN_EMAIL,
+      to: ADMIN_EMAILS.join(', '),
       subject: `[ACTION REQUIRED] New Instant Loan Application – ${memberNo} (${loanNo})`,
       text: [
         `Dear Sacco Administrator,`,
@@ -333,7 +333,7 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
           </div>
         </div>`,
     });
-    console.log(`   ✉️  Admin notification sent to ${ADMIN_EMAIL}`);
+    console.log(`   ✉️  Admin notification sent to ${ADMIN_EMAILS.join(', ')}`);
 
   } catch (emailErr) {
     // Email failure must never crash the loan registration flow
@@ -797,6 +797,125 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
       res.setHeader('Content-Disposition', `attachment; filename=loan-statement-${loanNo}.pdf`);
       res.send(pdfBuffer);
     });
+
+    const pageLeft = 50;
+    const pageRight = 550;
+    const pageWidth = pageRight - pageLeft;
+    const formatMoney = (value) => Number(value || 0).toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
+    const drawSectionTitle = (title) => {
+      doc.moveDown(0.2);
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(10)
+        .fillColor('#111827')
+        .text(title, pageLeft, doc.y, {
+          width: pageWidth,
+          align: 'center',
+        });
+      doc.moveDown(0.35);
+    };
+
+    const drawReportFooter = () => {
+      if (doc.y > 725) {
+        doc.addPage();
+      }
+
+      doc.moveDown(0.7);
+      doc
+        .font('Helvetica')
+        .fontSize(8)
+        .fillColor('#374151')
+        .text('This is a computer-generated statement.', pageLeft, doc.y, {
+          width: pageWidth,
+          align: 'center',
+        });
+      doc.moveDown(0.25);
+      doc.text(`Generated on: ${new Date().toLocaleString()}`, pageLeft, doc.y, {
+        width: pageWidth,
+        align: 'center',
+      });
+      doc.fillColor('#000000');
+    };
+
+    const drawInfoTable = (title, rows) => {
+      drawSectionTitle(title);
+      let y = doc.y + 6;
+      const rowHeight = 20;
+      const columns = [
+        { x: pageLeft, width: 78, type: 'label' },
+        { x: pageLeft + 78, width: 172, type: 'value' },
+        { x: pageLeft + 250, width: 78, type: 'label' },
+        { x: pageLeft + 328, width: 172, type: 'value' },
+      ];
+
+      rows.forEach((row) => {
+        columns.forEach((column, index) => {
+          doc.rect(column.x, y, column.width, rowHeight).stroke();
+          doc
+            .font(column.type === 'label' ? 'Helvetica-Bold' : 'Helvetica')
+            .fontSize(8)
+            .text(row[index] || '', column.x + 4, y + 6, {
+              width: column.width - 8,
+              height: rowHeight - 6,
+              ellipsis: true,
+            });
+        });
+        y += rowHeight;
+      });
+
+      doc.y = y + 10;
+    };
+
+    const transactionColumns = [
+      { key: 'date', label: 'Date', x: pageLeft, width: 52, align: 'left' },
+      { key: 'description', label: 'Description', x: pageLeft + 52, width: 130, align: 'left' },
+      { key: 'refNo', label: 'Ref No', x: pageLeft + 182, width: 58, align: 'left' },
+      { key: 'receiptNo', label: 'Receipt No', x: pageLeft + 240, width: 58, align: 'left' },
+      { key: 'debit', label: 'Debit (KES)', x: pageLeft + 298, width: 67, align: 'right' },
+      { key: 'credit', label: 'Credit (KES)', x: pageLeft + 365, width: 67, align: 'right' },
+      { key: 'balance', label: 'Running Amt (KES)', x: pageLeft + 432, width: 68, align: 'right' },
+    ];
+
+    const drawTransactionHeader = (y) => {
+      doc.rect(pageLeft, y, pageWidth, 20).fillAndStroke('#f3f4f6', '#111827');
+      transactionColumns.forEach((column) => {
+        doc
+          .fillColor('#111827')
+          .font('Helvetica-Bold')
+          .fontSize(7.5)
+          .text(column.label, column.x + 4, y + 6, {
+            width: column.width - 8,
+            align: column.align,
+          });
+      });
+      doc.fillColor('#000000');
+      return y + 20;
+    };
+
+    const drawTransactionRow = (y, row, options = {}) => {
+      const rowHeight = options.rowHeight || 18;
+      doc.rect(pageLeft, y, pageWidth, rowHeight).stroke();
+
+      transactionColumns.forEach((column) => {
+        doc.moveTo(column.x, y).lineTo(column.x, y + rowHeight).stroke();
+        doc
+          .font(options.bold ? 'Helvetica-Bold' : 'Helvetica')
+          .fontSize(7.5)
+          .text(row[column.key] || '-', column.x + 4, y + 5, {
+            width: column.width - 8,
+            height: rowHeight - 5,
+            align: column.align,
+            ellipsis: true,
+          });
+      });
+      doc.moveTo(pageRight, y).lineTo(pageRight, y + rowHeight).stroke();
+
+      return y + rowHeight;
+    };
     
     // Generate PDF
     doc.fontSize(16).font('Helvetica-Bold').text(organisationName, { align: 'center' });
@@ -807,64 +926,58 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
       .text(isPendingApplication ? 'LOAN APPLICATION SUMMARY' : 'LOAN STATEMENT', { align: 'center' });
     doc.moveDown();
     
-    doc.fontSize(10).font('Helvetica-Bold').text('MEMBER INFORMATION');
-    doc.font('Helvetica');
-    doc.text(`Name: ${member.holders_name || 'N/A'}`);
-    doc.text(`Member No: ${member.acc_no || memberNo}`);
-    doc.text(`ID No: ${member.id_no || 'N/A'}`);
-    doc.text(`Phone: ${member.tel1 || 'N/A'}`);
-    doc.text(`Email: ${member.email_add || 'N/A'}`);
-    doc.moveDown();
-    
-    doc.font('Helvetica-Bold').text('LOAN INFORMATION');
-    doc.font('Helvetica');
-    doc.text(`Loan Number: ${loanNo}`);
-    doc.text(`Purpose: ${displayPurpose}`);
-    doc.text(`Principal Amount: KES ${displayPrincipal.toLocaleString(undefined, { minimumFractionDigits: 2 })}`);
-    doc.text(`Outstanding Balance: KES ${displayOutstanding.toLocaleString(undefined, { minimumFractionDigits: 2 })}`);
-    doc.text(`Interest Rate: ${loan.interest || 0}%`);
-    doc.text(`Period: ${displayPeriod || 0} months`);
-    doc.text(`Start Date: ${loan.start_date ? new Date(loan.start_date).toLocaleDateString('en-GB') : 'N/A'}`);
-    doc.text(`End Date: ${loan.end_date ? new Date(loan.end_date).toLocaleDateString('en-GB') : 'N/A'}`);
-    doc.text(`Status: ${displayStatus}`);
+    drawInfoTable('MEMBER INFORMATION', [
+      ['Name', member.holders_name || 'N/A', 'Member No', member.acc_no || memberNo],
+      ['ID No', member.id_no || 'N/A', 'Phone', member.tel1 || 'N/A'],
+      ['Email', member.email_add || 'N/A', 'Print Date', new Date().toLocaleDateString('en-GB')],
+    ]);
+
+    const loanInfoRows = [
+      ['Loan Number', loanNo, 'Purpose', displayPurpose],
+      ['Principal', `KES ${formatMoney(displayPrincipal)}`, 'Outstanding', `KES ${formatMoney(displayOutstanding)}`],
+      ['Interest Rate', `${loan.interest || 0}%`, 'Period', `${displayPeriod || 0} months`],
+      ['Start Date', loan.start_date ? new Date(loan.start_date).toLocaleDateString('en-GB') : 'N/A', 'End Date', loan.end_date ? new Date(loan.end_date).toLocaleDateString('en-GB') : 'N/A'],
+      ['Status', displayStatus, '', ''],
+    ];
     if (isPendingApplication) {
-      doc.text(`Expected Monthly Repayment: KES ${parseFloat(loan.repayment || 0).toLocaleString()}`);
-      doc.text(`Total Repayable: KES ${parseFloat(loan.total || 0).toLocaleString()}`);
+      loanInfoRows.push([
+        'Monthly Repayment',
+        `KES ${formatMoney(loan.repayment)}`,
+        'Total Repayable',
+        `KES ${formatMoney(loan.total)}`,
+      ]);
     }
-    doc.moveDown();
+    drawInfoTable('LOAN INFORMATION', loanInfoRows);
 
     if (isPendingApplication) {
-      doc.font('Helvetica-Bold').text('APPLICATION STATUS', { underline: true });
+      drawSectionTitle('APPLICATION STATUS');
       doc.moveDown(0.5);
       doc.font('Helvetica').fontSize(10);
-      doc.text('This loan was created successfully and is still pending approval/posting.');
-      doc.text('A full transactional loan statement becomes available after the loan is posted to the live loan ledger.');
+      doc.text('This loan was created successfully and is still pending approval/posting.', pageLeft, doc.y, {
+        width: pageWidth,
+        align: 'center',
+      });
+      doc.text('A full transactional loan statement becomes available after the loan is posted to the live loan ledger.', pageLeft, doc.y, {
+        width: pageWidth,
+        align: 'center',
+      });
     } else {
-      doc.font('Helvetica-Bold').text('TRANSACTION HISTORY', { underline: true });
-      doc.moveDown(0.5);
+      drawSectionTitle('TRANSACTION HISTORY');
 
       let runningBalance = openingBalance;
       let totalDebit = 0, totalCredit = 0;
       let y = doc.y + 10;
 
-      doc.font('Helvetica-Bold').fontSize(8);
-      doc.text('Date', 50, y);
-      doc.text('Description', 100, y);
-      doc.text('Ref No', 250, y);
-      doc.text('Receipt No', 320, y);
-      doc.text('Debit (KES)', 400, y, { align: 'right' });
-      doc.text('Credit (KES)', 470, y, { align: 'right' });
-      doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
-      y += 18;
-      doc.font('Helvetica').fontSize(8);
-
-      doc.text('-', 50, y);
-      doc.text('OPENING BALANCE', 100, y);
-      doc.text('-', 250, y);
-      doc.text('-', 320, y);
-      doc.text(openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
-      doc.text('-', 470, y, { align: 'right' });
-      y += 15;
+      y = drawTransactionHeader(y);
+      y = drawTransactionRow(y, {
+        date: '-',
+        description: 'OPENING BALANCE',
+        refNo: '-',
+        receiptNo: '-',
+        debit: '-',
+        credit: '-',
+        balance: formatMoney(openingBalance),
+      }, { bold: true });
 
       for (const row of transResult.rows) {
         const debit = parseFloat(row.debit) || 0;
@@ -876,41 +989,47 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
         if (y > 700) {
           doc.addPage();
           y = 50;
-          doc.font('Helvetica-Bold').fontSize(8);
-          doc.text('Date', 50, y);
-          doc.text('Description', 100, y);
-          doc.text('Ref No', 250, y);
-          doc.text('Receipt No', 320, y);
-          doc.text('Debit (KES)', 400, y, { align: 'right' });
-          doc.text('Credit (KES)', 470, y, { align: 'right' });
-          doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
-          y += 18;
-          doc.font('Helvetica').fontSize(8);
+          y = drawTransactionHeader(y);
         }
 
-        doc.text(row.trans_date || '-', 50, y);
-        doc.text((row.item || 'Transaction').substring(0, 30), 100, y);
-        doc.text((row.reference_no || '-').substring(0, 15), 250, y);
-        doc.text((row.receipt_no || '-').substring(0, 15), 320, y);
-        doc.text(debit > 0 ? debit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 400, y, { align: 'right' });
-        doc.text(credit > 0 ? credit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 470, y, { align: 'right' });
-        y += 15;
+        y = drawTransactionRow(y, {
+          date: row.trans_date || '-',
+          description: row.item || 'Transaction',
+          refNo: row.reference_no || '-',
+          receiptNo: row.receipt_no || '-',
+          debit: debit > 0 ? formatMoney(debit) : '-',
+          credit: credit > 0 ? formatMoney(credit) : '-',
+          balance: formatMoney(runningBalance),
+        });
       }
 
-      y += 5;
-      doc.font('Helvetica-Bold');
-      doc.text('TOTALS', 100, y);
-      doc.text(totalDebit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
-      doc.text(totalCredit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 470, y, { align: 'right' });
-      y += 15;
-      doc.text('CLOSING BALANCE', 100, y);
-      doc.text(runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
+      if (y > 680) {
+        doc.addPage();
+        y = drawTransactionHeader(50);
+      }
+      y += 4;
+      y = drawTransactionRow(y, {
+        date: '',
+        description: 'TOTALS',
+        refNo: '',
+        receiptNo: '',
+        debit: formatMoney(totalDebit),
+        credit: formatMoney(totalCredit),
+        balance: formatMoney(runningBalance),
+      }, { bold: true });
+      y = drawTransactionRow(y, {
+        date: '',
+        description: 'CLOSING BALANCE',
+        refNo: '',
+        receiptNo: '',
+        debit: '',
+        credit: '',
+        balance: formatMoney(runningBalance),
+      }, { bold: true });
+      doc.y = y + 10;
     }
     
-    doc.moveDown();
-    doc.fontSize(8).font('Helvetica');
-    doc.text('This is a computer-generated statement.', { align: 'center' });
-    doc.text(`Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
+    drawReportFooter();
     doc.end();
     
   } catch (error) {
@@ -961,17 +1080,6 @@ app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
       [accountNo, startDate, endDate]
     );
     
-    const interestResult = await dbPool.query(
-      `SELECT COALESCE(SUM(credit - debit), 0) as period_interest
-       FROM ac_wdeposit_payable 
-       WHERE account_no = $1 
-         AND date::date BETWEEN $2::date AND $3::date
-         AND reference_no ILIKE 'WINT%'`,
-      [accountNo, startDate, endDate]
-    );
-    
-    const periodInterest = parseFloat(interestResult.rows[0]?.period_interest || 0);
-    
     const doc = new PDFDocument({ margin: 50, size: 'A4' });
     const chunks = [];
     
@@ -982,50 +1090,159 @@ app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
       res.setHeader('Content-Disposition', `attachment; filename=withdrawable-statement-${accountNo}.pdf`);
       res.send(pdfBuffer);
     });
+
+    const pageLeft = 50;
+    const pageRight = 550;
+    const pageWidth = pageRight - pageLeft;
+    const formatMoney = (value) => Number(value || 0).toLocaleString(undefined, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
+    const drawSectionTitle = (title) => {
+      doc.moveDown(0.2);
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(10)
+        .fillColor('#111827')
+        .text(title, pageLeft, doc.y, {
+          width: pageWidth,
+          align: 'center',
+        });
+      doc.moveDown(0.35);
+    };
+
+    const drawInfoTable = (title, rows) => {
+      drawSectionTitle(title);
+      let y = doc.y + 6;
+      const rowHeight = 20;
+      const columns = [
+        { x: pageLeft, width: 78, type: 'label' },
+        { x: pageLeft + 78, width: 172, type: 'value' },
+        { x: pageLeft + 250, width: 78, type: 'label' },
+        { x: pageLeft + 328, width: 172, type: 'value' },
+      ];
+
+      rows.forEach((row) => {
+        columns.forEach((column, index) => {
+          doc.rect(column.x, y, column.width, rowHeight).stroke();
+          doc
+            .font(column.type === 'label' ? 'Helvetica-Bold' : 'Helvetica')
+            .fontSize(8)
+            .fillColor('#111827')
+            .text(row[index] || '', column.x + 4, y + 6, {
+              width: column.width - 8,
+              height: rowHeight - 6,
+              ellipsis: true,
+            });
+        });
+        y += rowHeight;
+      });
+
+      doc.y = y + 10;
+    };
+
+    const transactionColumns = [
+      { key: 'date', label: 'Date', x: pageLeft, width: 52, align: 'left' },
+      { key: 'description', label: 'Narration', x: pageLeft + 52, width: 130, align: 'left' },
+      { key: 'refNo', label: 'Ref No', x: pageLeft + 182, width: 58, align: 'left' },
+      { key: 'receiptNo', label: 'Receipt No', x: pageLeft + 240, width: 58, align: 'left' },
+      { key: 'debit', label: 'Withdrawn (KES)', x: pageLeft + 298, width: 67, align: 'right' },
+      { key: 'credit', label: 'Deposited (KES)', x: pageLeft + 365, width: 67, align: 'right' },
+      { key: 'balance', label: 'Running Amt (KES)', x: pageLeft + 432, width: 68, align: 'right' },
+    ];
+
+    const drawTransactionHeader = (y) => {
+      doc.rect(pageLeft, y, pageWidth, 22).fillAndStroke('#f3f4f6', '#111827');
+      transactionColumns.forEach((column) => {
+        doc
+          .fillColor('#111827')
+          .font('Helvetica-Bold')
+          .fontSize(7)
+          .text(column.label, column.x + 4, y + 6, {
+            width: column.width - 8,
+            align: column.align,
+          });
+      });
+      doc.fillColor('#000000');
+      return y + 22;
+    };
+
+    const drawTransactionRow = (y, row, options = {}) => {
+      const rowHeight = options.rowHeight || 18;
+      doc.rect(pageLeft, y, pageWidth, rowHeight).stroke();
+
+      transactionColumns.forEach((column) => {
+        doc.moveTo(column.x, y).lineTo(column.x, y + rowHeight).stroke();
+        doc
+          .font(options.bold ? 'Helvetica-Bold' : 'Helvetica')
+          .fontSize(7.5)
+          .fillColor('#111827')
+          .text(row[column.key] || '-', column.x + 4, y + 5, {
+            width: column.width - 8,
+            height: rowHeight - 5,
+            align: column.align,
+            ellipsis: true,
+          });
+      });
+      doc.moveTo(pageRight, y).lineTo(pageRight, y + rowHeight).stroke();
+
+      return y + rowHeight;
+    };
+
+    const drawReportFooter = () => {
+      if (doc.y > 725) {
+        doc.addPage();
+      }
+
+      doc.moveDown(0.7);
+      doc
+        .font('Helvetica')
+        .fontSize(8)
+        .fillColor('#374151')
+        .text('This is a computer-generated statement.', pageLeft, doc.y, {
+          width: pageWidth,
+          align: 'center',
+        });
+      doc.moveDown(0.25);
+      doc.text(`Generated on: ${new Date().toLocaleString()}`, pageLeft, doc.y, {
+        width: pageWidth,
+        align: 'center',
+      });
+      doc.fillColor('#000000');
+    };
     
     doc.fontSize(16).font('Helvetica-Bold').text(organisationName, { align: 'center' });
     doc.moveDown();
     doc.fontSize(14).font('Helvetica-Bold').text('WITHDRAWABLE DEPOSITS STATEMENT', { align: 'center' });
     doc.moveDown();
     
-    doc.fontSize(10).font('Helvetica-Bold').text('ACCOUNT INFORMATION');
-    doc.font('Helvetica');
-    doc.text(`Name: ${account.holders_name || 'N/A'}`);
-    doc.text(`Account No: ${account.acc_no || accountNo}`);
-    doc.text(`ID No: ${account.id_no || 'N/A'}`);
-    doc.text(`Phone: ${account.tel1 || 'N/A'}`);
-    doc.text(`Email: ${account.email_add || 'N/A'}`);
-    doc.moveDown();
-    
-    doc.font('Helvetica-Bold').text(`STATEMENT PERIOD: ${new Date(startDate).toLocaleDateString('en-GB')} TO ${new Date(endDate).toLocaleDateString('en-GB')}`);
-    doc.text(`Print Date: ${new Date().toLocaleDateString('en-GB')}`);
-    doc.moveDown();
-    
-    doc.font('Helvetica-Bold').text('TRANSACTION HISTORY', { underline: true });
-    doc.moveDown(0.5);
+    drawInfoTable('ACCOUNT INFORMATION', [
+      ['Name', account.holders_name || 'N/A', 'Account No', account.acc_no || accountNo],
+      ['ID No', account.id_no || 'N/A', 'Phone', account.tel1 || 'N/A'],
+      ['Email', account.email_add || 'N/A', 'Print Date', new Date().toLocaleDateString('en-GB')],
+    ]);
+
+    drawInfoTable('STATEMENT PERIOD', [
+      ['From', new Date(startDate).toLocaleDateString('en-GB'), 'To', new Date(endDate).toLocaleDateString('en-GB')],
+    ]);
+
+    drawSectionTitle('TRANSACTION HISTORY');
     
     let runningBalance = openingBalance;
     let totalDebit = 0, totalCredit = 0;
     let y = doc.y + 10;
     
-    doc.font('Helvetica-Bold').fontSize(8);
-    doc.text('Date', 50, y);
-    doc.text('Narration', 100, y);
-    doc.text('Ref No', 250, y);
-    doc.text('Receipt No', 320, y);
-    doc.text('Withdrawn (KES)', 400, y, { align: 'right' });
-    doc.text('Deposited (KES)', 470, y, { align: 'right' });
-    doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
-    y += 18;
-    doc.font('Helvetica').fontSize(8);
-    
-    doc.text('-', 50, y);
-    doc.text('BAL/BF', 100, y);
-    doc.text('-', 250, y);
-    doc.text('-', 320, y);
-    doc.text(openingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
-    doc.text('-', 470, y, { align: 'right' });
-    y += 15;
+    y = drawTransactionHeader(y);
+    y = drawTransactionRow(y, {
+      date: '-',
+      description: 'BAL/BF',
+      refNo: '-',
+      receiptNo: '-',
+      debit: '-',
+      credit: '-',
+      balance: formatMoney(openingBalance),
+    }, { bold: true });
     
     for (const row of transResult.rows) {
       const debit = parseFloat(row.debit) || 0;
@@ -1037,47 +1254,46 @@ app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
       if (y > 700) {
         doc.addPage();
         y = 50;
-        doc.font('Helvetica-Bold').fontSize(8);
-        doc.text('Date', 50, y);
-        doc.text('Narration', 100, y);
-        doc.text('Ref No', 250, y);
-        doc.text('Receipt No', 320, y);
-        doc.text('Withdrawn (KES)', 400, y, { align: 'right' });
-        doc.text('Deposited (KES)', 470, y, { align: 'right' });
-        doc.moveTo(50, y + 12).lineTo(550, y + 12).stroke();
-        y += 18;
-        doc.font('Helvetica').fontSize(8);
+        y = drawTransactionHeader(y);
       }
       
-      doc.text(row.trans_date || '-', 50, y);
-      doc.text((row.item || 'Transaction').substring(0, 35), 100, y);
-      doc.text((row.reference_no || '-').substring(0, 15), 250, y);
-      doc.text((row.receipt_no || '-').substring(0, 15), 320, y);
-      doc.text(debit > 0 ? debit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 400, y, { align: 'right' });
-      doc.text(credit > 0 ? credit.toLocaleString(undefined, { minimumFractionDigits: 2 }) : '-', 470, y, { align: 'right' });
-      y += 15;
+      y = drawTransactionRow(y, {
+        date: row.trans_date || '-',
+        description: row.item || 'Transaction',
+        refNo: row.reference_no || '-',
+        receiptNo: row.receipt_no || '-',
+        debit: debit > 0 ? formatMoney(debit) : '-',
+        credit: credit > 0 ? formatMoney(credit) : '-',
+        balance: formatMoney(runningBalance),
+      });
     }
     
-    y += 5;
-    doc.font('Helvetica-Bold');
-    doc.text('TOTALS', 100, y);
-    doc.text(totalDebit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
-    doc.text(totalCredit.toLocaleString(undefined, { minimumFractionDigits: 2 }), 470, y, { align: 'right' });
-    y += 15;
-    doc.text('CLOSING BALANCE', 100, y);
-    doc.text(runningBalance.toLocaleString(undefined, { minimumFractionDigits: 2 }), 400, y, { align: 'right' });
-    y += 20;
-    
-    if (periodInterest !== 0) {
-      doc.font('Helvetica-Bold').text('INTEREST INFORMATION', { underline: true });
-      doc.font('Helvetica');
-      doc.text(`INTEREST FOR THE PERIOD: KES ${periodInterest.toLocaleString(undefined, { minimumFractionDigits: 2 })}`);
+    if (y > 680) {
+      doc.addPage();
+      y = drawTransactionHeader(50);
     }
+    y += 4;
+    y = drawTransactionRow(y, {
+      date: '',
+      description: 'TOTALS',
+      refNo: '',
+      receiptNo: '',
+      debit: formatMoney(totalDebit),
+      credit: formatMoney(totalCredit),
+      balance: formatMoney(runningBalance),
+    }, { bold: true });
+    y = drawTransactionRow(y, {
+      date: '',
+      description: 'CLOSING BALANCE',
+      refNo: '',
+      receiptNo: '',
+      debit: '',
+      credit: '',
+      balance: formatMoney(runningBalance),
+    }, { bold: true });
+    doc.y = y + 10;
     
-    doc.moveDown();
-    doc.fontSize(8).font('Helvetica');
-    doc.text('This is a computer-generated statement.', { align: 'center' });
-    doc.text(`Generated on: ${new Date().toLocaleString()}`, { align: 'center' });
+    drawReportFooter();
     doc.end();
     
   } catch (error) {

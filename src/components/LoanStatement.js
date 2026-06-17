@@ -1,10 +1,8 @@
 // LoanStatement.js - Matches Java backend: HAVING sum(balance-credit_bal) <> 0
-import React, { useRef, useState, useEffect } from 'react';
-import html2canvas from 'html2canvas';
+import React, { useState, useEffect } from 'react';
 import jsPDF from 'jspdf';
 
 function LoanStatement() {
-  const reportRef = useRef();
   const [memberData, setMemberData] = useState(null);
   const [loanData, setLoanData] = useState([]);
   const [allLoansRaw, setAllLoansRaw] = useState([]);
@@ -66,28 +64,41 @@ function LoanStatement() {
     console.log(`Total loans received from API: ${loans.length}`);
     setAllLoansRaw(loans);
     
+    const getOutstandingValue = (loan) => Number(
+      loan?.outStanding ??
+      loan?.outstanding ??
+      loan?.outstandingBalance ??
+      loan?.outstanding_balance ??
+      loan?.outstandingAmount ??
+      loan?.outstanding_amount ??
+      loan?.total ??
+      loan?.amount ??
+      loan?.balance ??
+      0
+    );
+
     // Log each loan's details for debugging
     loans.forEach((loan, idx) => {
-      console.log(`Loan ${idx + 1}: ${loan.loanNo} | Outstanding: ${loan.outStanding} | Amount: ${loan.amount}`);
+      console.log(`Loan ${idx + 1}: ${loan.loanNo} | Outstanding: ${getOutstandingValue(loan)} | Amount: ${loan.amount}`);
     });
     
-    // CRITICAL FILTER: Only loans with outstanding > 0
-    // Matches Java: HAVING sum(balance-credit_bal) <> 0
+    // Show every loan with a non-zero balance, including credit/overpaid balances.
     const activeLoans = loans.filter(loan => {
-      const outstanding = parseFloat(loan.outStanding);
-      const isActive = outstanding !== 0 && outstanding > 0;
+      const outstanding = getOutstandingValue(loan);
+      const isPending = Boolean(loan.isPending);
+      const hasOpenBalance = isPending || outstanding !== 0;
       
-      if (!isActive) {
+      if (!hasOpenBalance) {
         console.log(`❌ FILTERED OUT (Completed): ${loan.loanNo} - Outstanding: ${outstanding}`);
       } else {
-        console.log(`✅ KEEP (Active): ${loan.loanNo} - Outstanding: ${outstanding}`);
+        console.log(`✅ KEEP (Open balance): ${loan.loanNo} - Outstanding: ${outstanding}`);
       }
       
-      return isActive;
+      return hasOpenBalance;
     });
     
     console.log(`\n=== RESULTS ===`);
-    console.log(`Active loans (outstanding > 0): ${activeLoans.length}`);
+    console.log(`Open loan balances: ${activeLoans.length}`);
     console.log(`Completed loans filtered out: ${loans.length - activeLoans.length}`);
     
     // Format active loans for display
@@ -101,8 +112,8 @@ function LoanStatement() {
       rawEndDate: item.endDate || null,
       period: item.period !== null && item.period !== undefined ? item.period : 'N/A',
       originalAmount: parseFloat(item.amount) || 0,
-      balance: parseFloat(item.outStanding) || 0,
-      status: item.status || (item.isPending ? 'Pending Approval' : 'Active'),
+      balance: getOutstandingValue(item),
+      status: item.status || (item.isPending ? 'Pending Approval' : getOutstandingValue(item) < 0 ? 'Credit Balance' : 'Active'),
       isPending: Boolean(item.isPending),
     }));
     
@@ -110,7 +121,7 @@ function LoanStatement() {
     
     // Set appropriate message
     if (formattedLoans.length === 0 && loans.length > 0) {
-      setError(`✓ No active loans found. All ${loans.length} loan(s) have been fully repaid (outstanding balance = 0).`);
+      setError(`✓ No open loan balances found. All ${loans.length} loan(s) have been fully settled.`);
     } else if (loans.length === 0) {
       setError('No loan records found in the system.');
     } else {
@@ -234,21 +245,160 @@ function LoanStatement() {
   };
 
   const handleMainPDFDownload = async () => {
-    const element = reportRef.current;
-    if (!element) return;
-    
     try {
-      const canvas = await html2canvas(element, {
-        scale: 2,
-        backgroundColor: '#ffffff',
-        logging: false,
-        useCORS: true
+      const pdf = new jsPDF('l', 'mm', 'a4');
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 12;
+      const tableWidth = pageWidth - (margin * 2);
+      const brandRgb = [0, 163, 181];
+      let y = 14;
+
+      const drawText = (text, x, yPos, options = {}) => {
+        pdf.text(String(text ?? ''), x, yPos, options);
+      };
+
+      const drawHeader = () => {
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(13);
+        drawText(headerData?.organisationName || 'METROPOLITAN HOSPITAL SACCO LTD', pageWidth / 2, y, { align: 'center' });
+        y += 6;
+        pdf.setFontSize(10);
+        drawText('Member Loan Statement Summary', pageWidth / 2, y, { align: 'center' });
+        y += 5;
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(8);
+        drawText(`Generated: ${new Date().toLocaleDateString('en-GB')}`, pageWidth / 2, y, { align: 'center' });
+        y += 8;
+        pdf.setDrawColor(0, 0, 0);
+        pdf.line(margin, y, pageWidth - margin, y);
+        y += 6;
+      };
+
+      const drawInfoTable = (title, rows) => {
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(9);
+        drawText(title, margin, y);
+        y += 3;
+
+        const widths = [32, 106, 32, 106];
+        const rowHeight = 8;
+        rows.forEach((row) => {
+          let x = margin;
+          row.forEach((cell, index) => {
+            pdf.rect(x, y, widths[index], rowHeight);
+            pdf.setFont('helvetica', index % 2 === 0 ? 'bold' : 'normal');
+            pdf.setFontSize(7.5);
+            const value = String(cell ?? '');
+            const lines = pdf.splitTextToSize(value, widths[index] - 3);
+            drawText(lines[0] || '', x + 1.5, y + 5.2);
+            x += widths[index];
+          });
+          y += rowHeight;
+        });
+        y += 6;
+      };
+
+      const loanColumns = [
+        { label: 'Loan No', key: 'loanNo', width: 30, align: 'left' },
+        { label: 'Purpose', key: 'purpose', width: 48, align: 'left' },
+        { label: 'Start Date', key: 'sdate', width: 24, align: 'left' },
+        { label: 'End Date', key: 'edate', width: 24, align: 'left' },
+        { label: 'Period', key: 'period', width: 18, align: 'center' },
+        { label: 'Principal (KES)', key: 'principal', width: 38, align: 'right' },
+        { label: 'Outstanding (KES)', key: 'outstanding', width: 42, align: 'right' },
+        { label: 'Status', key: 'status', width: tableWidth - 224, align: 'left' },
+      ];
+
+      const drawLoanTableHeader = () => {
+        pdf.setFillColor(...brandRgb);
+        pdf.setTextColor(255, 255, 255);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(7.2);
+        let x = margin;
+        loanColumns.forEach((column) => {
+          pdf.rect(x, y, column.width, 9, 'F');
+          drawText(column.label, x + 1.5, y + 5.8, {
+            width: column.width - 3,
+            align: column.align,
+          });
+          x += column.width;
+        });
+        pdf.setTextColor(0, 0, 0);
+        y += 9;
+      };
+
+      const drawLoanRow = (row, bold = false) => {
+        if (y > pageHeight - 24) {
+          pdf.addPage();
+          y = 14;
+          drawLoanTableHeader();
+        }
+
+        const rowHeight = 8;
+        let x = margin;
+        pdf.setFont('helvetica', bold ? 'bold' : 'normal');
+        pdf.setFontSize(7.2);
+        loanColumns.forEach((column) => {
+          pdf.rect(x, y, column.width, rowHeight);
+          const value = String(row[column.key] ?? '');
+          const lines = pdf.splitTextToSize(value, column.width - 3);
+          drawText(lines[0] || '', x + 1.5, y + 5.2, {
+            width: column.width - 3,
+            align: column.align,
+          });
+          x += column.width;
+        });
+        y += rowHeight;
+      };
+
+      drawHeader();
+      drawInfoTable('MEMBER INFORMATION', [
+        ['Name', memberData?.holdersName || memberData?.name || 'N/A', 'Member No', memberData?.accNo || memberData?.memberNo || 'N/A'],
+        ['Email', memberData?.emailAdd || memberData?.email || 'N/A', 'Phone', memberData?.tel1 || memberData?.phone || 'N/A'],
+        ['ID No', memberData?.idNo || memberData?.idNumber || 'N/A', 'Print Date', new Date().toLocaleDateString('en-GB')],
+      ]);
+
+      drawInfoTable('LOAN SUMMARY', [
+        ['Open Balances', loanData.length, 'Total Principal', `KES ${formatCurrency(totalLoanAmount)}`],
+        ['Net Outstanding', `KES ${formatCurrency(totalOutstanding)}`, 'Report Status', 'Non-zero loan balances'],
+      ]);
+
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(9);
+      drawText('LOAN INFORMATION', margin, y);
+      y += 4;
+      drawLoanTableHeader();
+
+      loanData.forEach((loan) => {
+        drawLoanRow({
+          loanNo: loan.loanNo,
+          purpose: loan.purpose,
+          sdate: loan.sdate,
+          edate: loan.edate,
+          period: loan.period,
+          principal: formatCurrency(loan.originalAmount),
+          outstanding: formatCurrency(loan.balance),
+          status: loan.status,
+        });
       });
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      const imgWidth = 210;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+
+      drawLoanRow({
+        loanNo: '',
+        purpose: 'TOTAL OPEN BALANCES',
+        sdate: '',
+        edate: '',
+        period: '',
+        principal: formatCurrency(totalLoanAmount),
+        outstanding: formatCurrency(totalOutstanding),
+        status: '',
+      }, true);
+
+      y += 8;
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(7.5);
+      drawText('Note: This statement only shows loans that still have an outstanding balance. Fully repaid loans are kept out of this summary.', margin, y);
+
       pdf.save(`loan-summary-${memberData?.accNo || 'member'}-${new Date().toISOString().split('T')[0]}.pdf`);
     } catch (err) {
       console.error('Error generating PDF:', err);
@@ -408,7 +558,7 @@ function LoanStatement() {
 
   return (
     <>
-      <div ref={reportRef} className="report-container">
+      <div className="report-container">
         <div className="report-header">
           <h1>{headerData?.organisationName || 'METROPOLITAN HOSPITAL SACCO LTD'}</h1>
           <p>Member Loan Statement Summary</p>
@@ -449,7 +599,7 @@ function LoanStatement() {
 
         <div className="loan-summary-strip">
           <div>
-            <span>Active loans</span>
+            <span>Open balances</span>
             <strong>{loanData.length}</strong>
           </div>
           <div>
@@ -457,7 +607,7 @@ function LoanStatement() {
             <strong>{formatCurrency(totalLoanAmount)}</strong>
           </div>
           <div>
-            <span>Total outstanding</span>
+            <span>Net outstanding</span>
             <strong>{formatCurrency(totalOutstanding)}</strong>
           </div>
         </div>
@@ -491,7 +641,7 @@ function LoanStatement() {
                       {formatCurrency(loan.balance)}
                     </td>
                     <td data-label="Status">
-                      {loan.isPending ? 'Pending Approval' : 'Active'}
+                      {loan.status}
                     </td>
                     <td data-label="Action" className="action-cell">
                       <button 
@@ -507,8 +657,8 @@ function LoanStatement() {
                   <tr>
                     <td colSpan="9" style={{ textAlign: 'center', padding: '2rem' }}>
                       <div className="statement-empty-state">
-                        <strong>No active loans right now</strong>
-                        <span>{error || 'You do not have any loan with an outstanding balance at the moment.'}</span>
+                        <strong>No open loan balances right now</strong>
+                        <span>{error || 'You do not have any loan with a non-zero balance at the moment.'}</span>
                       </div>
                     </td>
                   </tr>
@@ -517,7 +667,7 @@ function LoanStatement() {
               {loanData.length > 0 && (
                 <tfoot>
                   <tr className="total-row">
-                    <td colSpan="5"><strong>TOTAL ACTIVE LOANS</strong></td>
+                    <td colSpan="5"><strong>TOTAL OPEN BALANCES</strong></td>
                     <td className="amount"><strong>{formatCurrency(totalLoanAmount)}</strong></td>
                     <td className="amount"><strong>{formatCurrency(totalOutstanding)}</strong></td>
                     <td></td>
@@ -529,8 +679,8 @@ function LoanStatement() {
         </div>
 
         <div className="report-footer">
-          <p><strong>Note:</strong> This statement only shows loans that still have an outstanding balance.</p>
-          <p>Fully repaid loans are kept out of this summary so the page stays focused on what still needs attention.</p>
+          <p><strong>Note:</strong> This statement shows loans with non-zero balances, including credit/overpaid balances.</p>
+          <p>Fully settled loans with a zero balance are kept out of this summary.</p>
           <p>For any queries, please contact the Sacco office.</p>
         </div>
       </div>
