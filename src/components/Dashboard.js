@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FaCoins, FaIdCard, FaPiggyBank, FaUniversity } from 'react-icons/fa';
+import { FaCoins, FaFileInvoiceDollar, FaPiggyBank, FaUniversity } from 'react-icons/fa';
 import Alert from './Alert';
 
 const Dashboard = ({ userData }) => {
@@ -9,6 +9,7 @@ const Dashboard = ({ userData }) => {
     savings: 0,
     shareCapital: 0,
     dividend: 0,
+    loanBalance: 0,
     loading: true,
     notice: ''
   }));
@@ -45,12 +46,14 @@ const Dashboard = ({ userData }) => {
       };
 
       try {
-        const [profileResponse, savingsResponse, shareCapitalResponse, dividendResponse, dividendTransactionsResponse] = await Promise.allSettled([
+        const [profileResponse, savingsResponse, shareCapitalResponse, dividendResponse, dividendTransactionsResponse, activeLoansResponse, pendingLoansResponse] = await Promise.allSettled([
           fetch(`/api/v1/member/${currentMemberNo}`, { headers, credentials: 'include' }),
           fetch(`/api/v1/savings/sumTotal/${currentMemberNo}`, { headers, credentials: 'include' }),
           fetch(`/api/v1/shareCapital/sumTotal/${currentMemberNo}`, { headers, credentials: 'include' }),
           fetch(`/api/v1/dividendPayable/sumTotal/${currentMemberNo}`, { headers, credentials: 'include' }),
-          fetch(`/api/v1/dividend/${currentMemberNo}`, { headers, credentials: 'include' })
+          fetch(`/api/v1/dividend/${currentMemberNo}`, { headers, credentials: 'include' }),
+          fetch(`/api/v1/instant/${currentMemberNo}`, { headers, credentials: 'include' }),
+          fetch(`/api/v1/loan-applications/${currentMemberNo}`, { headers, credentials: 'include' })
         ]);
 
         const nextProfile = await responseJson(profileResponse);
@@ -60,6 +63,10 @@ const Dashboard = ({ userData }) => {
         const transactionDividend = extractDividendTotal(await responseJson(dividendTransactionsResponse));
         const cachedDividend = extractCachedDividendTotal();
         const dividend = payableDividend || transactionDividend || cachedDividend;
+        const loanBalance = extractLoanBalance([
+          await responseJson(activeLoansResponse),
+          await responseJson(pendingLoansResponse)
+        ]);
 
         if (!mounted) return;
 
@@ -72,6 +79,7 @@ const Dashboard = ({ userData }) => {
           savings,
           shareCapital,
           dividend,
+          loanBalance,
           loading: false,
           notice: ''
         };
@@ -122,14 +130,14 @@ const Dashboard = ({ userData }) => {
       icon: FaCoins
     },
     {
-      label: 'Member No.',
-      value: memberNo,
-      hint: 'Used for portal requests',
-      path: '/profile',
+      label: 'Loan Balance',
+      value: formatCurrency(metrics.loanBalance),
+      hint: metrics.loading ? 'Refreshing loans...' : 'Active and pending loans',
+      path: '/loan-statement',
       accent: 'violet',
-      icon: FaIdCard
+      icon: FaFileInvoiceDollar
     }
-  ], [memberNo, metrics]);
+  ], [metrics]);
 
   const quickActions = [
     { label: 'Apply for instant loan', description: 'Preview repayment, interest, and monthly deduction.', path: '/apply-loan' },
@@ -320,6 +328,25 @@ const extractCachedDividendTotal = () => {
   if (cached.totals?.netDividend) return Number(cached.totals.netDividend);
 
   return extractDividendTotal(cached.transactions || cached);
+};
+
+const extractLoanBalance = (responses) => {
+  return responses.reduce((sum, response) => {
+    if (!response) return sum;
+
+    const loans = Array.isArray(response)
+      ? response
+      : Array.isArray(response.data)
+        ? response.data
+        : Array.isArray(response.loans)
+          ? response.loans
+          : [];
+
+    return sum + loans.reduce((loanSum, loan) => {
+      const balance = loan?.outStanding ?? loan?.outstandingBalance ?? loan?.balance ?? loan?.total ?? loan?.amount ?? 0;
+      return loanSum + Number(balance || 0);
+    }, 0);
+  }, 0);
 };
 
 const formatCurrency = (amount) => {

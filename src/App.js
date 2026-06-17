@@ -10,7 +10,6 @@ import {
   FaUniversity,
   FaChartLine,
   FaWallet,
-  FaBell,
   FaBars,
   FaChevronDown
 } from 'react-icons/fa';
@@ -208,10 +207,6 @@ const TopBar = ({ onMenuToggle }) => {
       </div>
 
       <div className="header-right">
-        <button type="button" className="notification-btn" aria-label="Notifications">
-          <FaBell />
-          <span>3</span>
-        </button>
 
         <div className="datetime" aria-label="Current date and time">
           <div className="time">{currentTime}</div>
@@ -379,4 +374,5 @@ function App() {
 }
 
 export default App;
+
 
