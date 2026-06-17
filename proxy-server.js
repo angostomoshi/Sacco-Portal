@@ -530,26 +530,49 @@ app.use('/api/v1', async (req, res, next) => {
 // ============================================
 app.post('/api/v1/auth/registerOtp', async (req, res) => {
   const memberNo = String(req.body?.memberNo || '').trim();
-  console.log(`\n📧 [LOCAL] Sending password reset OTP for: ${memberNo}`);
+  const requestedEmail = String(req.body?.email || '').trim();
+  const requestedMobile = String(req.body?.mobileNo || req.body?.phoneNo || '').trim();
+  console.log(`\n📧 [LOCAL] Sending OTP for: ${memberNo}`);
 
   if (!memberNo) {
     return res.status(400).json({ message: 'Member number is required.' });
   }
 
+  if (requestedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requestedEmail)) {
+    return res.status(400).json({ message: 'Please enter a valid email address.' });
+  }
+
   try {
-    const memberResult = await dbPool.query(
-      `SELECT u.member_no,
-              COALESCE(NULLIF(m.email_add, ''), NULLIF(u.email, '')) AS email,
-              COALESCE(NULLIF(m.holders_name, ''), u.member_no) AS member_name,
-              m.tel1
-       FROM pb_users u
-       LEFT JOIN pb_share_register m ON m.acc_no = u.member_no
-       WHERE u.member_no = $1`,
-      [memberNo]
-    );
+    let memberResult;
+    if (requestedEmail) {
+      memberResult = await dbPool.query(
+        `SELECT m.acc_no AS member_no,
+                $2::text AS email,
+                COALESCE(NULLIF(m.holders_name, ''), m.acc_no) AS member_name,
+                COALESCE(NULLIF($3::text, ''), m.tel1) AS tel1
+         FROM pb_share_register m
+         WHERE m.acc_no = $1`,
+        [memberNo, requestedEmail, requestedMobile]
+      );
+    } else {
+      memberResult = await dbPool.query(
+        `SELECT u.member_no,
+                COALESCE(NULLIF(m.email_add, ''), NULLIF(u.email, '')) AS email,
+                COALESCE(NULLIF(m.holders_name, ''), u.member_no) AS member_name,
+                m.tel1
+         FROM pb_users u
+         LEFT JOIN pb_share_register m ON m.acc_no = u.member_no
+         WHERE u.member_no = $1`,
+        [memberNo]
+      );
+    }
 
     if (memberResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Portal account not found for that member number.' });
+      return res.status(404).json({
+        message: requestedEmail
+          ? 'Member record not found for that member number.'
+          : 'Portal account not found for that member number.',
+      });
     }
 
     const member = memberResult.rows[0];

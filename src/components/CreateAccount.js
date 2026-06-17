@@ -19,7 +19,6 @@ const CreateAccount = () => {
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
   const [showOtpField, setShowOtpField] = useState(false);
-  const [sentOtp, setSentOtp] = useState('');
 
   const handleChange = (e) => {
     setFormData({
@@ -28,7 +27,7 @@ const CreateAccount = () => {
     });
   };
 
-  const handleSendOtp = () => {
+  const handleSendOtp = async () => {
     if (!formData.memberNo.trim()) {
       setError('Please enter your member number first.');
       return;
@@ -44,19 +43,40 @@ const CreateAccount = () => {
     
     setLoading(true);
     setError('');
+    setSuccess('');
     
-    setTimeout(() => {
-      const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
-      setSentOtp(generatedOtp);
+    try {
+      const response = await fetch('/api/v1/auth/registerOtp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          memberNo: formData.memberNo.trim(),
+          mobileNo: formData.mobileNo.trim(),
+          email: formData.email.trim(),
+          purpose: 'create-account'
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.message || 'We could not send the OTP right now.');
+      }
+
       setShowOtpField(true);
-      setLoading(false);
-      setSuccess('OTP sent successfully. Please check your phone.');
+      setSuccess(data.message || `OTP sent successfully to ${formData.email.trim()}. Please check your email.`);
       
       setTimeout(() => setSuccess(''), 3000);
-    }, 500);
+    } catch (err) {
+      setError(err.message || 'We could not send the OTP right now.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleSignUp = (e) => {
+  const handleSignUp = async (e) => {
     e.preventDefault();
     setError('');
     
@@ -76,12 +96,7 @@ const CreateAccount = () => {
     }
     
     if (!formData.otp.trim()) {
-      setError('Please enter the OTP sent to your phone.');
-      return;
-    }
-    
-    if (formData.otp !== sentOtp) {
-      setError('That OTP does not match. Please check the code and try again.');
+      setError('Please enter the OTP sent to your email.');
       return;
     }
     
@@ -101,15 +116,39 @@ const CreateAccount = () => {
     }
     
     setLoading(true);
+    setSuccess('');
     
-    setTimeout(() => {
-      setLoading(false);
+    try {
+      const response = await fetch('/api/v1/auth/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          memberNo: formData.memberNo.trim(),
+          mobileNo: formData.mobileNo.trim(),
+          email: formData.email.trim(),
+          password: formData.password,
+          otp: formData.otp.trim()
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.message || data.error || 'We could not create the account right now.');
+      }
+
       setSuccess('Account created successfully. Taking you back to login...');
       
       setTimeout(() => {
         navigate('/login');
       }, 2000);
-    }, 500);
+    } catch (err) {
+      setError(err.message || 'We could not create the account right now.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -196,7 +235,7 @@ const CreateAccount = () => {
                     className="form-control"
                     value={formData.otp}
                     onChange={handleChange}
-                    placeholder="Enter OTP"
+                    placeholder="Enter OTP sent to your email"
                   />
                 </div>
 
