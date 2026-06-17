@@ -252,7 +252,7 @@ function LoanStatement() {
       pdf.save(`loan-summary-${memberData?.accNo || 'member'}-${new Date().toISOString().split('T')[0]}.pdf`);
     } catch (err) {
       console.error('Error generating PDF:', err);
-      alert('Failed to generate PDF. Please try again.');
+      setError('We could not generate the PDF right now. Please try again.');
     }
   };
 
@@ -447,6 +447,21 @@ function LoanStatement() {
           </table>
         </div>
 
+        <div className="loan-summary-strip">
+          <div>
+            <span>Active loans</span>
+            <strong>{loanData.length}</strong>
+          </div>
+          <div>
+            <span>Total principal</span>
+            <strong>{formatCurrency(totalLoanAmount)}</strong>
+          </div>
+          <div>
+            <span>Total outstanding</span>
+            <strong>{formatCurrency(totalOutstanding)}</strong>
+          </div>
+        </div>
+
         <div className="table-section">
           <div className="table-responsive">
             <table className="report-table">
@@ -490,9 +505,10 @@ function LoanStatement() {
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan="8" style={{ textAlign: 'center', padding: '2rem' }}>
-                      <div style={{ color: '#38a169' }}>
-                        ✓ {error || 'All loans have been fully repaid. No active loans found.'}
+                    <td colSpan="9" style={{ textAlign: 'center', padding: '2rem' }}>
+                      <div className="statement-empty-state">
+                        <strong>No active loans right now</strong>
+                        <span>{error || 'You do not have any loan with an outstanding balance at the moment.'}</span>
                       </div>
                     </td>
                   </tr>
@@ -513,8 +529,8 @@ function LoanStatement() {
         </div>
 
         <div className="report-footer">
-          <p><strong>Note:</strong> This statement shows only active loans where outstanding balance is not equal to 0 (not fully repaid).</p>
-          <p>Java SQL Logic: <strong>HAVING SUM(balance - credit_bal) &lt;&gt; 0</strong></p>
+          <p><strong>Note:</strong> This statement only shows loans that still have an outstanding balance.</p>
+          <p>Fully repaid loans are kept out of this summary so the page stays focused on what still needs attention.</p>
           <p>For any queries, please contact the Sacco office.</p>
         </div>
       </div>
@@ -592,6 +608,61 @@ function LoanStatement() {
           width: 100%;
           border-collapse: collapse;
           margin-bottom: 1rem;
+        }
+
+        .loan-summary-strip {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 0.75rem;
+          margin-bottom: 1rem;
+        }
+
+        .loan-summary-strip div {
+          border: 1px solid #dbeafe;
+          border-radius: 14px;
+          padding: 0.9rem;
+          background: linear-gradient(135deg, #f8fbff, #eef9fb);
+        }
+
+        .loan-summary-strip span,
+        .loan-summary-strip strong {
+          display: block;
+        }
+
+        .loan-summary-strip span {
+          color: #64748b;
+          font-size: 0.72rem;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+        }
+
+        .loan-summary-strip strong {
+          margin-top: 0.35rem;
+          color: #0f172a;
+          font-size: 1rem;
+        }
+
+        .statement-empty-state {
+          display: inline-flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 0.35rem;
+          color: #166534;
+          background: #f0fdf4;
+          border: 1px solid #bbf7d0;
+          border-radius: 16px;
+          padding: 1rem 1.25rem;
+          max-width: 440px;
+        }
+
+        .statement-empty-state strong {
+          font-size: 0.95rem;
+        }
+
+        .statement-empty-state span {
+          color: #4b5563;
+          line-height: 1.5;
         }
         
         .info-table td, .report-table td, .report-table th {
@@ -787,6 +858,10 @@ function LoanStatement() {
           .report-container {
             padding: 1rem;
           }
+
+          .loan-summary-strip {
+            grid-template-columns: 1fr;
+          }
           
           .report-table thead {
             display: none;
@@ -853,3 +928,4 @@ function LoanStatement() {
 }
 
 export default LoanStatement;
+

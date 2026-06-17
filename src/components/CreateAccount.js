@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import logo from '../log.png';
+import Alert from './Alert';
 
 const CreateAccount = () => {
   const navigate = useNavigate();
@@ -29,15 +30,15 @@ const CreateAccount = () => {
 
   const handleSendOtp = () => {
     if (!formData.memberNo.trim()) {
-      setError('Please enter Member Number');
+      setError('Please enter your member number first.');
       return;
     }
     if (!formData.mobileNo.trim()) {
-      setError('Please enter Mobile Number');
+      setError('Please enter the mobile number linked to your membership.');
       return;
     }
     if (!formData.email.trim()) {
-      setError('Please enter Email');
+      setError('Please enter your email address.');
       return;
     }
     
@@ -49,7 +50,7 @@ const CreateAccount = () => {
       setSentOtp(generatedOtp);
       setShowOtpField(true);
       setLoading(false);
-      setSuccess('OTP sent successfully! Check your phone');
+      setSuccess('OTP sent successfully. Please check your phone.');
       
       setTimeout(() => setSuccess(''), 3000);
     }, 500);
@@ -60,42 +61,42 @@ const CreateAccount = () => {
     setError('');
     
     if (!formData.memberNo.trim()) {
-      setError('Please enter Member Number');
+      setError('Please enter your member number first.');
       return;
     }
     
     if (!formData.mobileNo.trim()) {
-      setError('Please enter Mobile Number');
+      setError('Please enter the mobile number linked to your membership.');
       return;
     }
     
     if (!formData.email.trim()) {
-      setError('Please enter Email');
+      setError('Please enter your email address.');
       return;
     }
     
     if (!formData.otp.trim()) {
-      setError('Please enter OTP');
+      setError('Please enter the OTP sent to your phone.');
       return;
     }
     
     if (formData.otp !== sentOtp) {
-      setError('Invalid OTP. Please try again.');
+      setError('That OTP does not match. Please check the code and try again.');
       return;
     }
     
     if (!formData.password.trim()) {
-      setError('Please enter password');
+      setError('Please create a password.');
       return;
     }
     
     if (formData.password.length < 4) {
-      setError('Password must be at least 4 characters');
+      setError('Your password should be at least 4 characters.');
       return;
     }
     
     if (formData.password !== formData.confirmPassword) {
-      setError('Passwords do not match');
+      setError('The two passwords do not match yet.');
       return;
     }
     
@@ -103,7 +104,7 @@ const CreateAccount = () => {
     
     setTimeout(() => {
       setLoading(false);
-      setSuccess('Account created successfully! Redirecting to login...');
+      setSuccess('Account created successfully. Taking you back to login...');
       
       setTimeout(() => {
         navigate('/login');
@@ -125,31 +126,15 @@ const CreateAccount = () => {
         
         <div className="login-body">
           {error && (
-            <div style={{ 
-              background: 'rgba(231, 76, 60, 0.08)', 
-              borderLeft: '3px solid #e74c3c', 
-              color: '#c0392b', 
-              padding: '0.75rem', 
-              borderRadius: '8px', 
-              marginBottom: '1rem', 
-              fontSize: '0.75rem' 
-            }}>
+            <Alert type="error" title="Account setup needs attention" className="auth-alert">
               {error}
-            </div>
+            </Alert>
           )}
           
           {success && (
-            <div style={{ 
-              background: 'rgba(72, 187, 120, 0.08)', 
-              borderLeft: '3px solid #48bb78', 
-              color: '#276749', 
-              padding: '0.75rem', 
-              borderRadius: '8px', 
-              marginBottom: '1rem', 
-              fontSize: '0.75rem' 
-            }}>
+            <Alert type="success" title="Nice, that worked" className="auth-alert">
               {success}
-            </div>
+            </Alert>
           )}
           
           <form onSubmit={handleSignUp}>

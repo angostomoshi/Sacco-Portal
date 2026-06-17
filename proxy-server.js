@@ -161,6 +161,187 @@ async function sendOtpEmail({ recipientEmail, recipientName, memberNo, otpCode }
 }
 
 // ============================================
+// LOAN APPLICATION EMAIL NOTIFICATIONS
+// ============================================
+async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount, period, repayment, total }) {
+  console.log(`\n📧 [LOAN EMAIL] Sending loan application notifications for: ${memberNo}`);
+
+  try {
+    // 1. Fetch applicant's email from the member register
+    const memberResult = await dbPool.query(
+      `SELECT COALESCE(NULLIF(m.email_add, ''), '') AS email,
+              COALESCE(NULLIF(m.holders_name, ''), $2) AS member_name
+       FROM pb_share_register m
+       WHERE m.acc_no = $1`,
+      [memberNo, memberName]
+    );
+
+    const applicantEmail = memberResult.rows[0]?.email || null;
+    const applicantName  = memberResult.rows[0]?.member_name || memberName || 'Member';
+
+    // 2. Fetch SMTP settings
+    const emailSettings = await getEmailServerSettings();
+    const smtpPort  = Number(emailSettings.smpt_port || 587);
+    const secure    = smtpPort === 465;
+    const protocol  = normalizeProtocol(emailSettings.protocols);
+    const sender    = emailSettings.default_sender || emailSettings.smtp_username;
+
+    const transport = nodemailer.createTransport({
+      host: emailSettings.smtp_host,
+      port: smtpPort,
+      secure,
+      requireTLS: !secure && (protocol.includes('TLS') || protocol.includes('START')),
+      auth: emailSettings.require_auth ? {
+        user: emailSettings.smtp_username,
+        pass: emailSettings.smtp_password,
+      } : undefined,
+      logger: Boolean(emailSettings.smtp_debug),
+      debug:  Boolean(emailSettings.smtp_debug),
+    });
+
+    const appliedDate  = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' });
+    const formatKES = (val) => Number(val).toLocaleString('en-KE', { minimumFractionDigits: 2 });
+
+    // ── Applicant confirmation email ──────────────────────────────────────
+    if (applicantEmail) {
+      await transport.sendMail({
+        from: sender,
+        to: applicantEmail,
+        subject: `Metro Sacco – Instant Loan Application Received (${loanNo})`,
+        text: [
+          `Dear ${applicantName},`,
+          ``,
+          `Your instant loan application has been received and is pending approval.`,
+          ``,
+          `LOAN APPLICATION SUMMARY`,
+          `─────────────────────────────────`,
+          `Loan Number   : ${loanNo}`,
+          `Member No     : ${memberNo}`,
+          `Amount Applied: KES ${formatKES(amount)}`,
+          `Period        : ${period} Month(s)`,
+          `Monthly Rep.  : KES ${formatKES(repayment)}`,
+          `Total Repay.  : KES ${formatKES(total)}`,
+          `Date Applied  : ${appliedDate}`,
+          `Status        : Pending Approval`,
+          `─────────────────────────────────`,
+          ``,
+          `You will be notified once the loan has been reviewed. For any queries, please contact the Sacco office.`,
+          ``,
+          `Metropolitan Hospital Sacco Ltd`,
+        ].join('\n'),
+        html: `
+          <div style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.6;max-width:600px;margin:0 auto">
+            <div style="background:#00a3b5;padding:24px 32px;border-radius:8px 8px 0 0">
+              <h2 style="color:#ffffff;margin:0;font-size:18px">Metropolitan Hospital Sacco Ltd</h2>
+              <p style="color:#e0f7fa;margin:4px 0 0;font-size:13px">Loan Application Received</p>
+            </div>
+            <div style="background:#ffffff;padding:28px 32px;border:1px solid #e5e7eb;border-top:none">
+              <p>Dear <strong>${applicantName}</strong>,</p>
+              <p>Your instant loan application has been received and is currently <strong>pending approval</strong>.</p>
+
+              <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:14px">
+                <thead>
+                  <tr style="background:#f3f4f6">
+                    <th colspan="2" style="text-align:left;padding:10px 14px;border:1px solid #e5e7eb;color:#374151">Loan Application Summary</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Loan Number</td>   <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${loanNo}</td></tr>
+                  <tr style="background:#f9fafb"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Member No</td>     <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${memberNo}</td></tr>
+                  <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Amount Applied</td><td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(amount)}</td></tr>
+                  <tr style="background:#f9fafb"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Period</td>        <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${period} Month(s)</td></tr>
+                  <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Monthly Repay.</td><td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(repayment)}</td></tr>
+                  <tr style="background:#f9fafb"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Total Repay.</td>  <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(total)}</td></tr>
+                  <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Date Applied</td>  <td style="padding:8px 14px;border:1px solid #e5e7eb">${appliedDate}</td></tr>
+                  <tr style="background:#fff7ed"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Status</td>        <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600;color:#d97706">⏳ Pending Approval</td></tr>
+                </tbody>
+              </table>
+
+              <p style="font-size:13px;color:#6b7280">You will be notified once the loan has been reviewed. For any queries, please contact the Sacco office.</p>
+            </div>
+            <div style="background:#f9fafb;padding:14px 32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;text-align:center">
+              <p style="margin:0;font-size:12px;color:#9ca3af">Metropolitan Hospital Sacco Ltd &mdash; Automated Notification</p>
+            </div>
+          </div>`,
+      });
+      console.log(`   ✉️  Applicant confirmation sent to ${applicantEmail}`);
+    } else {
+      console.warn(`   ⚠️  No email address found for member ${memberNo} – skipping applicant email`);
+    }
+
+    // ── Admin notification email ──────────────────────────────────────────
+    const ADMIN_EMAIL = 'sacco@metro-hospital.com';
+    await transport.sendMail({
+      from: sender,
+      to: ADMIN_EMAIL,
+      subject: `[ACTION REQUIRED] New Instant Loan Application – ${memberNo} (${loanNo})`,
+      text: [
+        `Dear Sacco Administrator,`,
+        ``,
+        `A new instant loan application has been submitted and requires your approval.`,
+        ``,
+        `LOAN APPLICATION SUMMARY`,
+        `─────────────────────────────────`,
+        `Loan Number   : ${loanNo}`,
+        `Member No     : ${memberNo}`,
+        `Member Name   : ${applicantName}`,
+        `Amount Applied: KES ${formatKES(amount)}`,
+        `Period        : ${period} Month(s)`,
+        `Monthly Rep.  : KES ${formatKES(repayment)}`,
+        `Total Repay.  : KES ${formatKES(total)}`,
+        `Date Applied  : ${appliedDate}`,
+        `Status        : Pending Approval`,
+        `─────────────────────────────────`,
+        ``,
+        `Please log in to the Sacco administration system to review and approve or decline this application.`,
+        ``,
+        `Metropolitan Hospital Sacco Ltd`,
+      ].join('\n'),
+      html: `
+        <div style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.6;max-width:600px;margin:0 auto">
+          <div style="background:#b91c1c;padding:24px 32px;border-radius:8px 8px 0 0">
+            <h2 style="color:#ffffff;margin:0;font-size:18px">Metropolitan Hospital Sacco Ltd</h2>
+            <p style="color:#fecaca;margin:4px 0 0;font-size:13px">⚠️ Action Required – New Loan Application</p>
+          </div>
+          <div style="background:#ffffff;padding:28px 32px;border:1px solid #e5e7eb;border-top:none">
+            <p>Dear Sacco Administrator,</p>
+            <p>A new instant loan application has been submitted and is awaiting your approval:</p>
+
+            <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:14px">
+              <thead>
+                <tr style="background:#f3f4f6">
+                  <th colspan="2" style="text-align:left;padding:10px 14px;border:1px solid #e5e7eb;color:#374151">Loan Application Summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Loan Number</td>   <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${loanNo}</td></tr>
+                <tr style="background:#f9fafb"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Member No</td>     <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${memberNo}</td></tr>
+                <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Member Name</td>   <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${applicantName}</td></tr>
+                <tr style="background:#f9fafb"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Amount Applied</td><td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(amount)}</td></tr>
+                <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Period</td>        <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${period} Month(s)</td></tr>
+                <tr style="background:#f9fafb"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Monthly Repay.</td><td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(repayment)}</td></tr>
+                <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Total Repay.</td>  <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(total)}</td></tr>
+                <tr style="background:#f9fafb"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Date Applied</td>  <td style="padding:8px 14px;border:1px solid #e5e7eb">${appliedDate}</td></tr>
+                <tr style="background:#fff7ed"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Status</td>        <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600;color:#d97706">⏳ Pending Approval</td></tr>
+              </tbody>
+            </table>
+
+            <p style="font-size:13px">Please log in to the Sacco administration system to review and process this application.</p>
+          </div>
+          <div style="background:#f9fafb;padding:14px 32px;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;text-align:center">
+            <p style="margin:0;font-size:12px;color:#9ca3af">Metropolitan Hospital Sacco Ltd &mdash; Automated Notification</p>
+          </div>
+        </div>`,
+    });
+    console.log(`   ✉️  Admin notification sent to ${ADMIN_EMAIL}`);
+
+  } catch (emailErr) {
+    // Email failure must never crash the loan registration flow
+    console.error('   ❌ [LOAN EMAIL] Failed to send loan application emails:', emailErr.message);
+  }
+}
+
+// ============================================
 // DEBUG: Clear all OTPs for a member
 // ============================================
 // Endpoints handled by THIS proxy server locally (PDF generation etc.)
@@ -228,6 +409,9 @@ app.use('/api/v1', async (req, res, next) => {
         console.log(`   📤 Mapped body for Spring Boot:`, springBody);
       }
 
+      // Snapshot original frontend loan fields BEFORE remapping
+      const originalLoanBody = req.path === '/loan/apply' ? { ...req.body } : null;
+
       if (req.path === '/loan/apply') {
         springBody = {
           memNo: req.body.memberNo,
@@ -262,6 +446,24 @@ app.use('/api/v1', async (req, res, next) => {
       });
 
       console.log(`   ✅ Spring Boot response: ${response.status}`);
+
+      // ── Fire-and-forget email notifications for successful loan application ──
+      if (req.path === '/loan/apply' && response.status === 201 && originalLoanBody) {
+        const createdLoan = response.data || {};
+        setImmediate(() => {
+          sendLoanApplicationEmails({
+            memberNo:  originalLoanBody.memberNo,
+            memberName: originalLoanBody.memberName,
+            loanNo:    createdLoan.loanNo || createdLoan.loan_no || 'N/A',
+            amount:    originalLoanBody.loanAmount,
+            period:    originalLoanBody.periodMonths,
+            repayment: originalLoanBody.monthlyDeduction,
+            total:     originalLoanBody.totalAmount,
+          });
+        });
+        console.log(`   📧 Email notifications queued for loan application`);
+      }
+
       return res.status(response.status).json(response.data);
     } catch (error) {
       console.error(`   ❌ Spring Boot error:`, error.message);

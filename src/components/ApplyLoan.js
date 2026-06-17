@@ -1,5 +1,8 @@
+
+
 // ApplyLoan.js
 import React, { useState, useEffect } from 'react';
+import Alert from './Alert';
 
 function ApplyLoan() {
   const [memberData, setMemberData] = useState(null);
@@ -15,6 +18,7 @@ function ApplyLoan() {
 
   const brandColor = '#00a3b5';
   const INTEREST_RATE = 4.5;
+  const MIN_AMOUNT = 1000;
   const MAX_AMOUNT = 50000;
   const MAX_PERIOD = 6;
 
@@ -32,7 +36,7 @@ function ApplyLoan() {
       try {
         let memberNumber = localStorage.getItem('memberNumber');
         const token = localStorage.getItem('authToken');
-        
+
         if (!memberNumber) {
           const storedMemberData = localStorage.getItem('memberData');
           if (storedMemberData) {
@@ -40,12 +44,12 @@ function ApplyLoan() {
             memberNumber = parsed.accNo || parsed.memberNo || parsed.memberNumber;
           }
         }
-        
+
         if (!memberNumber) {
           console.error('Member number not found');
           return;
         }
-        
+
         const response = await fetch(`${API_BASE_URL}/member/${memberNumber}`, {
           method: 'GET',
           headers: {
@@ -53,7 +57,7 @@ function ApplyLoan() {
             'Authorization': token ? `Bearer ${token}` : ''
           }
         });
-        
+
         if (response.ok) {
           const data = await response.json();
           setMemberData(data);
@@ -78,19 +82,19 @@ function ApplyLoan() {
         setLoading(false);
       }
     };
-    
+
     fetchMemberData();
   }, [API_BASE_URL]);
 
   const calculateLoan = () => {
     const amount = parseFloat(loanAmount) || 0;
     const months = parseFloat(period) || 0;
-    
+
     if (amount && months && months > 0) {
       const interest = amount * (INTEREST_RATE / 100) * months;
       const total = amount + interest;
       const monthly = total / months;
-      
+
       setTotalAmount(total.toFixed(2));
       setMonthlyDeduction(monthly.toFixed(2));
       setShowResults(true);
@@ -108,52 +112,58 @@ function ApplyLoan() {
   const validateLoan = () => {
     const amount = parseFloat(loanAmount);
     const months = parseFloat(period);
-    
+
     if (!amount || amount <= 0) {
-      setSubmitMessage('Please enter a valid loan amount');
+      setSubmitMessage('Please enter a loan amount.');
       setSubmitMessageType('error');
       return false;
     }
-    
-    if (!months || months <= 0) {
-      setSubmitMessage('Please select a valid loan period');
+
+    if (amount < MIN_AMOUNT) {
+      setSubmitMessage(`The minimum instant loan amount is KES ${MIN_AMOUNT.toLocaleString()}.`);
       setSubmitMessageType('error');
       return false;
     }
-    
+
     if (amount > MAX_AMOUNT) {
-      setSubmitMessage(`Maximum loan amount is KES ${MAX_AMOUNT.toLocaleString()}`);
+      setSubmitMessage(`The maximum instant loan amount is KES ${MAX_AMOUNT.toLocaleString()}.`);
       setSubmitMessageType('error');
       return false;
     }
-    
+
+    if (!months || months <= 0) {
+      setSubmitMessage('Please select a repayment period.');
+      setSubmitMessageType('error');
+      return false;
+    }
+
     if (months > MAX_PERIOD) {
-      setSubmitMessage(`Maximum repayment period is ${MAX_PERIOD} months`);
+      setSubmitMessage(`The maximum repayment period is ${MAX_PERIOD} months.`);
       setSubmitMessageType('error');
       return false;
     }
-    
+
     return true;
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
+
     if (!validateLoan()) {
       setTimeout(() => {
         setSubmitMessage('');
       }, 5000);
       return;
     }
-    
+
     setSubmitting(true);
     setSubmitMessage('');
-    
+
     const interestAmount = parseFloat(loanAmount) * (INTEREST_RATE / 100) * parseFloat(period);
     const token = localStorage.getItem('authToken');
     const memberNumber = memberData?.accNo || localStorage.getItem('memberNumber') || 'MS967';
     const memberName = memberData?.holdersName || localStorage.getItem('userName') || 'ANGOSTO MOSHI';
-    
+
     const loanApplication = {
       memberNo: memberNumber,
       memberName: memberName,
@@ -167,13 +177,13 @@ function ApplyLoan() {
       applicationDate: new Date().toISOString(),
       status: 'Pending'
     };
-    
+
     try {
       console.log('=== LOAN APPLICATION DEBUG ===');
       console.log('Submitting loan application to API:', loanApplication);
       console.log('API URL:', `${API_BASE_URL}/loan/apply`);
       console.log('Token exists:', !!token);
-      
+
       // Send to proxy backend API (which forwards to live server)
       const response = await fetch(`${API_BASE_URL}/loan/apply`, {
         method: 'POST',
@@ -183,11 +193,11 @@ function ApplyLoan() {
         },
         body: JSON.stringify(loanApplication)
       });
-      
+
       const result = await response.json();
       console.log('Response status:', response.status);
       console.log('Response data:', result);
-      
+
       if (response.ok) {
         // Save to localStorage as backup
         const existingApplications = JSON.parse(localStorage.getItem('loanApplications') || '[]');
@@ -199,10 +209,10 @@ function ApplyLoan() {
           submittedAt: new Date().toISOString()
         });
         localStorage.setItem('loanApplications', JSON.stringify(existingApplications));
-        
-        setSubmitMessage(`✓ Instant Loan application submitted successfully! Loan Number: ${result.loanNumber || 'Processing'}`);
+
+        setSubmitMessage(`Your instant loan application has been submitted. Loan number: ${result.loanNumber || 'Processing'}.`);
         setSubmitMessageType('success');
-        
+
         setTimeout(() => {
           setLoanAmount('');
           setPeriod('');
@@ -212,12 +222,12 @@ function ApplyLoan() {
           setSubmitMessage('');
         }, 3000);
       } else {
-        throw new Error(result.message || result.error || 'Failed to submit application');
+        throw new Error(result.message || result.error || 'We could not submit the application right now.');
       }
-      
+
     } catch (err) {
       console.error('Error submitting loan application:', err);
-      setSubmitMessage(`❌ ${err.message || 'Failed to submit application. Please try again.'}`);
+      setSubmitMessage(err.message || 'We could not submit the application right now. Please try again.');
       setSubmitMessageType('error');
     } finally {
       setSubmitting(false);
@@ -287,30 +297,28 @@ function ApplyLoan() {
                   <span className="category-limits">(Max: KES 50,000 | Max: 6 months | Interest: 4.5%/month)</span>
                 </div>
               </div>
-              
+
               <div className="calculator-field">
                 <label>Amount (KES)</label>
-                <input 
+                <input
                   type="number"
                   className="calculator-input"
-                  placeholder={`Enter amount (max ${MAX_AMOUNT.toLocaleString()})`}
+                  placeholder={`Enter amount (KES ${MIN_AMOUNT.toLocaleString()} – ${MAX_AMOUNT.toLocaleString()})`}
                   value={loanAmount}
                   onChange={(e) => {
-                    const value = parseFloat(e.target.value);
-                    if (e.target.value === '' || (value <= MAX_AMOUNT && value >= 0)) {
-                      setLoanAmount(e.target.value);
-                    }
+                    // Allow free typing — validation runs on submit
+                    setLoanAmount(e.target.value);
                   }}
-                  step="1000"
-                  min="0"
+                  step="1"
+                  min={MIN_AMOUNT}
                   max={MAX_AMOUNT}
                   required
                 />
               </div>
-              
+
               <div className="calculator-field">
                 <label>Period (Months)</label>
-                <select 
+                <select
                   className="calculator-select"
                   value={period}
                   onChange={(e) => setPeriod(e.target.value)}
@@ -330,7 +338,7 @@ function ApplyLoan() {
             <div className="loan-info">
               <div className="info-icon">ℹ️</div>
               <div className="info-text">
-                <strong>Instant Loan Features:</strong> Maximum loan KES 50,000 | Maximum repayment period 6 months | Interest rate 4.5% per month
+                <strong>Instant Loan Features:</strong> Minimum KES 1,000 | Maximum KES 50,000 | Maximum repayment period 6 months | Interest rate 4.5% per month
               </div>
             </div>
 
@@ -359,12 +367,16 @@ function ApplyLoan() {
             )}
 
             {submitMessage && (
-              <div className={`submit-message ${submitMessageType}`}>
+              <Alert
+                type={submitMessageType === 'success' ? 'success' : 'error'}
+                title={submitMessageType === 'success' ? 'Application received' : 'Please review your application'}
+                className="submit-message"
+              >
                 {submitMessage}
-              </div>
+              </Alert>
             )}
 
-            <button 
+            <button
               type="submit"
               className="submit-btn"
               disabled={submitting || !showResults}

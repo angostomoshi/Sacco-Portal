@@ -1,6 +1,7 @@
 // MemberProfile.js
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import Alert from './Alert';
 
 const MemberProfile = () => {
   const navigate = useNavigate();
@@ -328,6 +329,14 @@ const MemberProfile = () => {
           </div>
         </div>
       </div>
+
+      {error && (
+        <div style={{ marginTop: '1rem' }}>
+          <Alert type="warning" title="Showing the best available profile data">
+            {error}
+          </Alert>
+        </div>
+      )}
 
       {(memberData?.nok1 || memberData?.nok2 || memberData?.nok3) && (
         <div className="card" style={{ marginTop: '1.5rem' }}>

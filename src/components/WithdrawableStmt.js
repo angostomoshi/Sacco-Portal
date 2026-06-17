@@ -92,7 +92,7 @@ function WithdrawableStmt() {
       }, 100);
     } else {
       console.error('No PDF blob available for download');
-      alert('PDF not ready for download. Please wait for the statement to load completely.');
+      setError('Your PDF is not ready yet. Please wait for the statement to finish loading.');
     }
   };
 
@@ -174,7 +174,7 @@ function WithdrawableStmt() {
       pdf.save(`withdrawable-summary-${memberData?.accNo || 'member'}-${new Date().toISOString().split('T')[0]}.pdf`);
     } catch (err) {
       console.error('Error generating PDF:', err);
-      alert('Failed to generate PDF. Please try again.');
+      setError('We could not generate the PDF right now. Please try again.');
     }
   };
 

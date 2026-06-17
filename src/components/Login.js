@@ -2,6 +2,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import logo from '../log.png';
+import Alert from './Alert';
 
 const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
   const navigate = useNavigate();
@@ -19,7 +20,7 @@ const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
     setError('');
     
     if (!memberNumber.trim() || !password.trim()) {
-      setError('Please enter both member number and password');
+      setError('Please enter your member number and password to continue.');
       return;
     }
     
@@ -156,11 +157,11 @@ const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
           }
         }
       } else {
-        setError(authData.message || authData.error || 'Invalid member number or password');
+        setError(authData.message || authData.error || 'We could not sign you in with those details. Please check and try again.');
       }
     } catch (err) {
       console.error('Login error:', err);
-      setError('Connection error. Please try again.');
+      setError('We could not reach the server right now. Please check your connection and try again.');
     } finally {
       setLoading(false);
     }
@@ -357,12 +358,10 @@ const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
           <p style={styles.headerP}>Sign in to your account</p>
         </div>
         
-        <div style={styles.body}>
-          {error && (
-            <div style={styles.errorMessage}>
-              <span>⚠️</span>
+        <div style={styles.body}>          {error && (
+            <Alert type="error" title="Sign in needs attention" className="auth-alert">
               {error}
-            </div>
+            </Alert>
           )}
           
           <form onSubmit={handleSubmit}>
@@ -468,3 +467,4 @@ const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
 };
 
 export default Login;
+

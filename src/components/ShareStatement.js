@@ -2,6 +2,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
+import Alert from './Alert';
 
 function ShareStatement() {
   const reportRef = useRef();
@@ -140,13 +141,13 @@ function ShareStatement() {
         }
         
         if (!token) {
-          setError('Authentication required. Please login again.');
+        setError('Your session needs a refresh. Please log in again to view savings.');
           setLoading(false);
           return;
         }
         
         if (!memberNumber) {
-          setError('Member number not found. Please login again.');
+          setError('We could not find your member number. Please log in again.');
           setLoading(false);
           return;
         }
@@ -175,7 +176,7 @@ function ShareStatement() {
           if (cachedProfile) {
             setMemberData(JSON.parse(cachedProfile));
           } else {
-            setError('Failed to fetch member data');
+            setError('We could not refresh your member details. Showing available statement data.');
           }
         }
         
@@ -208,23 +209,23 @@ function ShareStatement() {
             };
             localStorage.setItem('savingsTransactions', JSON.stringify(savingsToCache));
           } else {
-            setError('No savings records found for this member');
+            setError('No savings records were found for this member.');
             setShareTransactions([]);
             setTotals({ totalSavings: 0 });
           }
         } else if (savingsResponse.status === 404) {
-          setError('No savings records found for this member');
+          setError('No savings records were found for this member.');
           setShareTransactions([]);
           setTotals({ totalSavings: 0 });
         } else {
-          setError(`Failed to fetch savings data: ${savingsResponse.status}`);
+          setError(`We could not fetch savings data right now. Server response: ${savingsResponse.status}.`);
           setShareTransactions([]);
           setTotals({ totalSavings: 0 });
         }
         
       } catch (err) {
         console.error('Error fetching data:', err);
-        setError('Network error. Unable to fetch savings data.');
+        setError('We could not reach the server right now. Please check your connection and try again.');
         setShareTransactions([]);
         setTotals({ totalSavings: 0 });
       } finally {
@@ -392,12 +393,10 @@ function ShareStatement() {
           📄 Download PDF Statement
         </button>
       </div>
-
-      {/* Error Message */}
       {error && (
-        <div className="error-message">
-          <span>⚠️</span> {error}
-        </div>
+        <Alert type="warning" title="Savings statement notice">
+          {error}
+        </Alert>
       )}
 
       <style>{`
@@ -642,3 +641,4 @@ function ShareStatement() {
 }
 
 export default ShareStatement;
+

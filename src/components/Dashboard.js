@@ -1,382 +1,330 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { FaCoins, FaIdCard, FaPiggyBank, FaUniversity } from 'react-icons/fa';
+import Alert from './Alert';
 
 const Dashboard = ({ userData }) => {
-  const brandColor = '#00a3b5';
+  const navigate = useNavigate();
+  const [metrics, setMetrics] = useState(() => readStoredJson('dashboardMetrics', {
+    savings: 0,
+    shareCapital: 0,
+    dividend: 0,
+    loading: true,
+    notice: ''
+  }));
+  const [profile, setProfile] = useState(() => {
+    const passedProfile = userData && Object.keys(userData).length ? userData : null;
+    return passedProfile || readStoredJson('memberProfile', readStoredJson('memberData', {}));
+  });
 
-  // Important Information Cards Data
-  const infoCards = [
-    {
-      id: 1,
-      title: 'ACCESS INFORMATION',
-      content: 'Enter your ID No. to access Sacco info. Check Share, Dividend, Guarantorship, Loan statements.',
-      icon: '🔑',
-      badge: 'Essential',
-      badgeColor: '#00a3b5'
-    },
-    {
-      id: 2,
-      title: 'SUPPORT CONTACT',
-      content: 'Contact Dan on 0785278786 or email: sacco@metro-hospital.com.',
-      icon: '📞',
-      badge: 'Support',
-      badgeColor: '#e53e3e'
-    },
-    {
-      id: 3,
-      title: 'DIVIDEND INFO',
-      content: 'Dividends apply to LAST Year\'s shares, NOT current year shares.',
-      icon: '💰',
-      badge: 'Finance',
-      badgeColor: '#38a169'
-    },
-    {
-      id: 4,
-      title: 'WHT INFORMATION',
-      content: 'WHT only applies to those who tick to be paid dividends.',
-      icon: '📊',
-      badge: 'Tax',
-      badgeColor: '#ed8936'
-    },
-    {
-      id: 5,
-      title: 'MOBILE NUMBER',
-      content: 'Confirm your mobile number - dividends paid through indicated number.',
-      icon: '✉️',
-      badge: 'Profile',
-      badgeColor: '#805ad5'
-    },
-    {
-      id: 6,
-      title: 'MEMBER BENEFITS',
-      content: 'Access low-interest loans, earn competitive dividends, flexible repayment.',
-      icon: '🎁',
-      badge: 'Perks',
-      badgeColor: '#d69e2e'
-    }
-  ];
-
-  // Get member number safely
-  const getMemberNumber = () => {
-    if (userData?.memberNo) return userData.memberNo;
-    if (userData?.memberNumber) return userData.memberNumber;
-    if (userData?.accNo) return userData.accNo;
-    return localStorage.getItem('memberNumber') || 'User';
-  };
+  const memberName = profile?.holdersName || profile?.name || localStorage.getItem('userName') || 'Member';
+  const memberNo = profile?.accNo || profile?.memberNo || profile?.memberNumber || localStorage.getItem('memberNumber') || 'N/A';
 
   useEffect(() => {
-    if (userData) {
-      console.log('Welcome back, Member:', getMemberNumber());
-    } else {
-      // Try to get from localStorage if not passed as prop
-      const storedData = localStorage.getItem('userData');
-      if (storedData) {
-        try {
-          const parsedData = JSON.parse(storedData);
-          console.log('Welcome back, Member:', parsedData.memberNo || parsedData.memberNumber || 'User');
-        } catch (e) {
-          console.log('Welcome back, Member!');
-        }
+    let mounted = true;
+
+    const fetchDashboardData = async () => {
+      const token = localStorage.getItem('authToken');
+      const storedMemberData = readStoredJson('memberData', {});
+      const currentMemberNo = memberNo !== 'N/A'
+        ? memberNo
+        : storedMemberData.accNo || storedMemberData.memberNo || localStorage.getItem('memberNumber');
+
+      if (!currentMemberNo) {
+        setMetrics((current) => ({
+          ...current,
+          loading: false,
+          notice: 'We could not find your member number. Please log in again if the dashboard looks incomplete.'
+        }));
+        return;
       }
+
+      const headers = {
+        'Content-Type': 'application/json',
+        ...(token && { Authorization: `Bearer ${token}` })
+      };
+
+      try {
+        const [profileResponse, savingsResponse, shareCapitalResponse, dividendResponse, dividendTransactionsResponse] = await Promise.allSettled([
+          fetch(`/api/v1/member/${currentMemberNo}`, { headers, credentials: 'include' }),
+          fetch(`/api/v1/savings/sumTotal/${currentMemberNo}`, { headers, credentials: 'include' }),
+          fetch(`/api/v1/shareCapital/sumTotal/${currentMemberNo}`, { headers, credentials: 'include' }),
+          fetch(`/api/v1/dividendPayable/sumTotal/${currentMemberNo}`, { headers, credentials: 'include' }),
+          fetch(`/api/v1/dividend/${currentMemberNo}`, { headers, credentials: 'include' })
+        ]);
+
+        const nextProfile = await responseJson(profileResponse);
+        const savings = extractTotal(await responseJson(savingsResponse));
+        const shareCapital = extractTotal(await responseJson(shareCapitalResponse));
+        const payableDividend = extractTotal(await responseJson(dividendResponse));
+        const transactionDividend = extractDividendTotal(await responseJson(dividendTransactionsResponse));
+        const cachedDividend = extractCachedDividendTotal();
+        const dividend = payableDividend || transactionDividend || cachedDividend;
+
+        if (!mounted) return;
+
+        if (nextProfile && Object.keys(nextProfile).length) {
+          setProfile(nextProfile);
+          localStorage.setItem('memberProfile', JSON.stringify(nextProfile));
+        }
+
+        const nextMetrics = {
+          savings,
+          shareCapital,
+          dividend,
+          loading: false,
+          notice: ''
+        };
+
+        setMetrics(nextMetrics);
+        localStorage.setItem('dashboardMetrics', JSON.stringify(nextMetrics));
+      } catch (error) {
+        console.error('Error loading dashboard metrics:', error);
+        if (!mounted) return;
+        setMetrics((current) => ({
+          ...current,
+          loading: false,
+          notice: 'We could not refresh your dashboard right now. Showing the last saved figures where available.'
+        }));
+      }
+    };
+
+    fetchDashboardData();
+
+    return () => {
+      mounted = false;
+    };
+  }, [memberNo]);
+
+  const summaryCards = useMemo(() => [
+    {
+      label: 'Savings Balance',
+      value: formatCurrency(metrics.savings),
+      hint: metrics.loading ? 'Refreshing deposits...' : 'Your member deposits',
+      path: '/share-statement',
+      accent: 'cyan',
+      icon: FaPiggyBank
+    },
+    {
+      label: 'Share Capital',
+      value: formatCurrency(metrics.shareCapital),
+      hint: metrics.loading ? 'Refreshing capital...' : 'Ownership contribution',
+      path: '/share-capital',
+      accent: 'green',
+      icon: FaUniversity
+    },
+    {
+      label: 'Dividend Payable',
+      value: formatCurrency(metrics.dividend),
+      hint: metrics.loading ? 'Refreshing dividends...' : 'Latest dividend estimate',
+      path: '/dividends',
+      accent: 'amber',
+      icon: FaCoins
+    },
+    {
+      label: 'Member No.',
+      value: memberNo,
+      hint: 'Used for portal requests',
+      path: '/profile',
+      accent: 'violet',
+      icon: FaIdCard
     }
-  }, [userData]);
+  ], [memberNo, metrics]);
+
+  const quickActions = [
+    { label: 'Apply for instant loan', description: 'Preview repayment, interest, and monthly deduction.', path: '/apply-loan' },
+    { label: 'Download savings statement', description: 'Export a clean PDF for your records.', path: '/share-statement' },
+    { label: 'Review guarantor position', description: 'See loans where you appear as guarantor.', path: '/guarantors' }
+  ];
+
+  const timelineItems = [
+    { label: 'Profile check', text: 'Confirm your phone and email are current before payment periods.' },
+    { label: 'Dividend rule', text: 'Dividends are calculated from last year’s eligible shares.' },
+    { label: 'Support', text: 'For help, email sacco@metro-hospital.com with your member number.' }
+  ];
 
   return (
-    <div className="dashboard-wrapper">
-      {/* Removed the welcome message from here - now it's in the top bar */}
-      
-      <div className="cards-grid">
-        {infoCards.map((card, index) => (
-          <div key={card.id} className="info-card" style={{ '--card-index': index }}>
-            <div className="card-glow" style={{ background: `linear-gradient(90deg, ${card.badgeColor}40, ${brandColor}40, ${card.badgeColor}40)` }}></div>
-            <div className="card-inner">
-              <div className="card-top">
-                <div className="card-icon-wrapper">
-                  <div className="card-icon-bg" style={{ background: `linear-gradient(135deg, ${card.badgeColor}20, ${brandColor}20)` }}>
-                    <span className="card-icon">{card.icon}</span>
-                  </div>
-                </div>
-                <div className="card-badge" style={{ backgroundColor: card.badgeColor }}>
-                  {card.badge}
-                </div>
-              </div>
-              <h3 className="card-title">
-                <span className="title-dot" style={{ backgroundColor: card.badgeColor }}></span>
-                {card.title}
-              </h3>
-              <p className="card-content">{card.content}</p>
-              <div className="card-hover-effect" style={{ background: `linear-gradient(135deg, ${card.badgeColor}08, ${brandColor}08)` }}></div>
-            </div>
+    <div className="modern-dashboard">
+      <section className="dashboard-hero">
+        <div>
+          <span className="eyebrow">Metropolitan Hospital Sacco</span>
+          <h1>Financial overview</h1>
+          <p>
+            A clean command center for member balances, statements, loan actions,
+            and the key updates members need most.
+          </p>
+          <div className="hero-actions">
+            <button type="button" onClick={() => navigate('/apply-loan')}>Apply for loan</button>
+            <button type="button" className="secondary" onClick={() => navigate('/profile')}>View profile</button>
           </div>
+        </div>
+        <div className="hero-card">
+          <span>Member status</span>
+          <strong>Active</strong>
+          <p>Balances, statements, loans, and member actions in one clear workspace.</p>
+          <small>Member {memberNo}</small>
+        </div>
+      </section>
+
+      {metrics.notice && (
+        <Alert type="warning" title="Dashboard notice" actionLabel="Refresh" onAction={() => window.location.reload()}>
+          {metrics.notice}
+        </Alert>
+      )}
+
+      <div className="summary-grid">
+        {summaryCards.map((card) => (
+          <MetricCard
+            key={card.label}
+            card={card}
+            loading={metrics.loading}
+            onClick={() => navigate(card.path)}
+          />
         ))}
       </div>
 
-      <div className="dashboard-footer">
-        <p>© {new Date().getFullYear()} Metropolitan Hospital Sacco Ltd | Building Wealth Changing Lives</p>
+      <div className="dashboard-main-grid">
+        <section className="dashboard-panel">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Quick actions</span>
+              <h2>Move faster from the dashboard</h2>
+            </div>
+          </div>
+          <div className="action-list">
+            {quickActions.map((action) => (
+              <button type="button" key={action.label} onClick={() => navigate(action.path)}>
+                <div>
+                  <strong>{action.label}</strong>
+                  <span>{action.description}</span>
+                </div>
+                <span className="action-arrow">→</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="dashboard-panel">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Member guidance</span>
+              <h2>Good to know</h2>
+            </div>
+          </div>
+          <div className="timeline-list">
+            {timelineItems.map((item) => (
+              <div className="timeline-item" key={item.label}>
+                <strong>{item.label}</strong>
+                <span>{item.text}</span>
+              </div>
+            ))}
+          </div>
+          <Alert type="info" title="Need help?">
+            If something looks off, contact the Sacco office and include your member number so they can assist faster.
+          </Alert>
+        </section>
       </div>
 
-      <style>{`
-        * {
-          margin: 0;
-          padding: 0;
-          box-sizing: border-box;
-        }
-
-        .dashboard-wrapper {
-          min-height: 100vh;
-          width: 100%;
-          background: #f8f9fa;
-          padding: 2rem;
-          display: flex;
-          flex-direction: column;
-          position: relative;
-        }
-
-        /* Cards Grid */
-        .cards-grid {
-          display: grid;
-          grid-template-columns: repeat(3, 1fr);
-          gap: 1.5rem;
-          width: 100%;
-          max-width: 1400px;
-          margin: 0 auto;
-          position: relative;
-          z-index: 1;
-        }
-
-        /* Modern Card Design */
-        .info-card {
-          position: relative;
-          background: white;
-          border-radius: 24px;
-          overflow: hidden;
-          transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-          cursor: pointer;
-          animation: cardFloatIn 0.5s ease-out forwards;
-          animation-delay: calc(var(--card-index) * 0.05s);
-          opacity: 0;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-          border: 1px solid rgba(0, 0, 0, 0.05);
-        }
-
-        .info-card::before {
-          content: '';
-          position: absolute;
-          top: 0;
-          left: -100%;
-          width: 100%;
-          height: 100%;
-          background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
-          transition: left 0.5s;
-          z-index: 2;
-          pointer-events: none;
-        }
-
-        .info-card:hover::before {
-          left: 100%;
-        }
-
-        .info-card:hover {
-          transform: translateY(-8px) scale(1.02);
-          box-shadow: 0 20px 30px -12px rgba(0, 0, 0, 0.15);
-        }
-
-        .card-glow {
-          position: absolute;
-          top: 0;
-          left: 0;
-          right: 0;
-          height: 4px;
-          background-size: 200% 100%;
-          animation: gradientShift 3s ease infinite;
-          opacity: 0.8;
-        }
-
-        @keyframes gradientShift {
-          0%, 100% { background-position: 0% 50%; }
-          50% { background-position: 100% 50%; }
-        }
-
-        .card-inner {
-          padding: 1.5rem;
-          position: relative;
-          z-index: 1;
-        }
-
-        /* Card Top Section */
-        .card-top {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 1.25rem;
-        }
-
-        .card-icon-wrapper {
-          position: relative;
-        }
-
-        .card-icon-bg {
-          width: 56px;
-          height: 56px;
-          border-radius: 18px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          transition: all 0.3s ease;
-          box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
-        }
-
-        .info-card:hover .card-icon-bg {
-          transform: rotate(5deg) scale(1.05);
-          box-shadow: 0 8px 15px rgba(0, 0, 0, 0.1);
-        }
-
-        .card-icon {
-          font-size: 1.8rem;
-        }
-
-        .card-badge {
-          padding: 0.35rem 0.9rem;
-          border-radius: 50px;
-          font-size: 0.7rem;
-          font-weight: 700;
-          color: white;
-          letter-spacing: 0.5px;
-          text-transform: uppercase;
-          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
-          transition: transform 0.2s;
-        }
-
-        .info-card:hover .card-badge {
-          transform: scale(1.05);
-        }
-
-        /* Card Title */
-        .card-title {
-          font-size: 1rem;
-          font-weight: 800;
-          color: #1a202c;
-          margin-bottom: 0.75rem;
-          line-height: 1.4;
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-        }
-
-        .title-dot {
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          display: inline-block;
-          animation: pulse 2s ease infinite;
-        }
-
-        @keyframes pulse {
-          0%, 100% { opacity: 1; transform: scale(1); }
-          50% { opacity: 0.5; transform: scale(0.8); }
-        }
-
-        /* Card Content */
-        .card-content {
-          font-size: 0.85rem;
-          color: #4a5568;
-          line-height: 1.6;
-          margin: 0;
-          position: relative;
-          z-index: 1;
-        }
-
-        /* Hover Effect Line */
-        .card-hover-effect {
-          position: absolute;
-          bottom: 0;
-          left: 0;
-          right: 0;
-          height: 0;
-          transition: height 0.3s ease;
-          z-index: 0;
-          pointer-events: none;
-        }
-
-        .info-card:hover .card-hover-effect {
-          height: 100%;
-        }
-
-        /* Footer */
-        .dashboard-footer {
-          margin-top: 2rem;
-          padding-top: 1rem;
-          text-align: center;
-          color: #a0aec0;
-          font-size: 0.75rem;
-          position: relative;
-          z-index: 1;
-          border-top: 1px solid #e2e8f0;
-        }
-
-        /* Animations */
-        @keyframes cardFloatIn {
-          from {
-            opacity: 0;
-            transform: translateY(30px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-
-        /* Responsive Design */
-        @media (max-width: 1200px) {
-          .cards-grid {
-            gap: 1.25rem;
-          }
-        }
-
-        @media (max-width: 968px) {
-          .dashboard-wrapper {
-            padding: 1.5rem;
-          }
-          
-          .cards-grid {
-            grid-template-columns: repeat(2, 1fr);
-            gap: 1.25rem;
-          }
-          
-          .card-icon-bg {
-            width: 48px;
-            height: 48px;
-          }
-          
-          .card-icon {
-            font-size: 1.5rem;
-          }
-        }
-
-        @media (max-width: 640px) {
-          .dashboard-wrapper {
-            padding: 1rem;
-          }
-          
-          .cards-grid {
-            grid-template-columns: 1fr;
-            gap: 1rem;
-          }
-          
-          .card-inner {
-            padding: 1.25rem;
-          }
-          
-          .card-title {
-            font-size: 0.95rem;
-          }
-          
-          .card-content {
-            font-size: 0.8rem;
-          }
-        }
-      `}</style>
+      <footer className="dashboard-footer">
+        © {new Date().getFullYear()} Metropolitan Hospital Sacco Ltd · Building Wealth, Changing Lives
+      </footer>
     </div>
   );
+};
+
+const readStoredJson = (key, fallback) => {
+  try {
+    const value = localStorage.getItem(key);
+    return value ? JSON.parse(value) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const MetricCard = ({ card, loading, onClick }) => {
+  const Icon = card.icon;
+
+  return (
+    <button
+      type="button"
+      className={`summary-card summary-card-${card.accent} ${loading ? 'is-loading' : ''}`}
+      onClick={onClick}
+    >
+      <div className="summary-card-top">
+        <span>{card.label}</span>
+        <div className="summary-card-icon"><Icon /></div>
+      </div>
+      {loading ? (
+        <>
+          <strong className="metric-skeleton"></strong>
+          <small className="metric-skeleton short"></small>
+        </>
+      ) : (
+        <>
+          <strong>{card.value}</strong>
+          <small>{card.hint}</small>
+        </>
+      )}
+    </button>
+  );
+};
+
+const responseJson = async (settledResponse) => {
+  if (settledResponse.status !== 'fulfilled' || !settledResponse.value.ok) return null;
+  return settledResponse.value.json();
+};
+
+const extractTotal = (data) => {
+  if (typeof data === 'number') return data;
+  if (!data || typeof data !== 'object') return 0;
+
+  const candidates = [
+    data.sumTotal,
+    data.total,
+    data.amount,
+    data.balance,
+    data.data?.sumTotal,
+    data.data?.total,
+    data.data?.amount,
+    data.data?.balance
+  ];
+
+  const found = candidates.find((value) => value !== undefined && value !== null && value !== '');
+  return Number(found || 0);
+};
+
+const extractDividendTotal = (data) => {
+  if (!data) return 0;
+  if (typeof data === 'number') return data;
+
+  const directTotal = extractTotal(data);
+  if (directTotal) return directTotal;
+
+  const transactions = Array.isArray(data)
+    ? data
+    : data.dividends || data.transactions || data.data || data.records || [];
+
+  if (!Array.isArray(transactions)) return 0;
+
+  return transactions.reduce((sum, item) => {
+    const amount = Number(item?.dividend || item?.dividendAmount || item?.amount || item?.credit || 0);
+    return sum + amount;
+  }, 0);
+};
+
+const extractCachedDividendTotal = () => {
+  const cached = readStoredJson('dividendTransactions', null);
+  if (!cached) return 0;
+
+  if (cached.totals?.totalDividends) return Number(cached.totals.totalDividends);
+  if (cached.totals?.netDividend) return Number(cached.totals.netDividend);
+
+  return extractDividendTotal(cached.transactions || cached);
+};
+
+const formatCurrency = (amount) => {
+  const value = Number(amount || 0);
+  return `KES ${value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 };
 
 export default Dashboard;
