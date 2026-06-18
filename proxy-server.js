@@ -4,6 +4,7 @@ const axios = require('axios');
 const { Pool } = require('pg');
 const PDFDocument = require('pdfkit');
 const nodemailer = require('nodemailer');
+const bcrypt = require('bcrypt');
 
 const app = express();
 const port = 3023;
@@ -350,6 +351,8 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
 // Endpoints handled by THIS proxy server locally (PDF generation etc.)
 const LOCAL_ENDPOINTS = [
   '/auth/registerOtp',
+  '/auth/change-password',
+  '/auth/register',
   '/loan/apply',
   '/loan-statement-direct', 
   '/withdrawable-statement-direct',
@@ -362,9 +365,7 @@ const LOCAL_ENDPOINT_PREFIXES = [
 
 // Endpoints that must go to the Spring Boot backend (port 8080)
 const SPRING_ENDPOINTS = [
-  '/auth/change-password',
   '/auth/authenticate',
-  '/auth/register',
 ];
 
 // ============================================
@@ -527,12 +528,196 @@ app.use('/api/v1', async (req, res, next) => {
   }
 });
 
+
+// ============================================
+// LOCAL AUTH HELPERS
+// ============================================
+const BCRYPT_ROUNDS = Number(process.env.BCRYPT_ROUNDS || 10);
+
+function normalizeAuthMemberNo(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function normalizePhoneDigits(value) {
+  return String(value || '').replace(/\D/g, '');
+}
+
+function phoneMatches(inputPhone, registeredPhone) {
+  const input = normalizePhoneDigits(inputPhone);
+  const registered = normalizePhoneDigits(registeredPhone);
+  if (!input || !registered) return true;
+  return input === registered || input.endsWith(registered.slice(-9)) || registered.endsWith(input.slice(-9));
+}
+
+async function getLatestUnusedOtp(memberNo) {
+  const result = await dbPool.query(
+    `SELECT id, pass_key, email, cdate
+     FROM pb_sacco_passkey
+     WHERE member_no = $1
+       AND COALESCE(key_used, false) = false
+       AND COALESCE(logged_in, loged_in, true) = true
+     ORDER BY cdate DESC NULLS LAST, id DESC
+     LIMIT 1`,
+    [memberNo]
+  );
+
+  return result.rows[0] || null;
+}
+
+async function verifyLatestOtp({ memberNo, otp, email }) {
+  const otpRecord = await getLatestUnusedOtp(memberNo);
+  if (!otpRecord) {
+    return { ok: false, status: 400, message: 'No active OTP was found. Please request a new OTP.' };
+  }
+
+  if (Number(otpRecord.pass_key) !== Number(otp)) {
+    return { ok: false, status: 400, message: 'Invalid OTP. Please check the latest code sent to your email.' };
+  }
+
+  if (email && otpRecord.email && String(otpRecord.email).trim().toLowerCase() !== String(email).trim().toLowerCase()) {
+    return { ok: false, status: 400, message: 'This OTP was issued for a different email address. Please request a new OTP.' };
+  }
+
+  return { ok: true, otpRecord };
+}
+
+async function markMemberOtpsUsed(memberNo) {
+  await dbPool.query(
+    `UPDATE pb_sacco_passkey
+     SET key_used = true
+     WHERE member_no = $1
+       AND COALESCE(key_used, false) = false`,
+    [memberNo]
+  );
+}
+
 // ============================================
 // LOCAL ENDPOINT: CHANGE PASSWORD
 // ============================================
-// NOTE: /api/v1/auth/change-password is now forwarded to Spring Boot via SPRING_ENDPOINTS above.
-// The old local implementation has been removed — Spring Boot handles OTP verification + password update.
+app.post('/api/v1/auth/change-password', async (req, res) => {
+  const memberNo = normalizeAuthMemberNo(req.body?.memberNo);
+  const otp = String(req.body?.otp || '').trim();
+  const password = String(req.body?.newPassword || req.body?.password || '').trim();
 
+  console.log(`\n?? [LOCAL] Changing password for: ${memberNo}`);
+
+  if (!memberNo) return res.status(400).json({ message: 'Member number is required.' });
+  if (!otp) return res.status(400).json({ message: 'OTP is required.' });
+  if (password.length < 4) return res.status(400).json({ message: 'Password must be at least 4 characters long.' });
+
+  try {
+    const userResult = await dbPool.query(
+      `SELECT id, member_no FROM pb_users WHERE upper(member_no) = $1 ORDER BY id DESC LIMIT 1`,
+      [memberNo]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Portal account not found for that member number. Please create an account first.' });
+    }
+
+    const otpCheck = await verifyLatestOtp({ memberNo, otp });
+    if (!otpCheck.ok) {
+      return res.status(otpCheck.status).json({ message: otpCheck.message });
+    }
+
+    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    await dbPool.query(
+      `UPDATE pb_users
+       SET password = $1,
+           otp = $2
+       WHERE id = $3`,
+      [passwordHash, Number(otp), userResult.rows[0].id]
+    );
+
+    await markMemberOtpsUsed(memberNo);
+
+    return res.json({
+      success: true,
+      message: 'Password changed successfully. You can now log in with your new password.',
+    });
+  } catch (error) {
+    console.error('? Local password change failed:', error.message);
+    return res.status(500).json({ message: 'Unable to change password right now. Please try again later.' });
+  }
+});
+
+// ============================================
+// LOCAL ENDPOINT: CREATE PORTAL ACCOUNT
+// ============================================
+app.post('/api/v1/auth/register', async (req, res) => {
+  const memberNo = normalizeAuthMemberNo(req.body?.memberNo);
+  const mobileNo = String(req.body?.mobileNo || req.body?.phoneNo || '').trim();
+  const email = String(req.body?.email || '').trim();
+  const otp = String(req.body?.otp || '').trim();
+  const password = String(req.body?.password || req.body?.newPassword || '').trim();
+
+  console.log(`\n?? [LOCAL] Creating portal account for: ${memberNo}`);
+
+  if (!memberNo) return res.status(400).json({ message: 'Member number is required.' });
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ message: 'A valid email address is required.' });
+  if (!mobileNo) return res.status(400).json({ message: 'Mobile number is required.' });
+  if (!otp) return res.status(400).json({ message: 'OTP is required.' });
+  if (password.length < 4) return res.status(400).json({ message: 'Password must be at least 4 characters long.' });
+
+  try {
+    const memberResult = await dbPool.query(
+      `SELECT acc_no, tel1
+       FROM pb_share_register
+       WHERE upper(acc_no) = $1
+       ORDER BY acc_no
+       LIMIT 1`,
+      [memberNo]
+    );
+
+    if (memberResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Member record not found for that member number.' });
+    }
+
+    if (!phoneMatches(mobileNo, memberResult.rows[0].tel1)) {
+      return res.status(400).json({ message: 'The mobile number does not match this member account.' });
+    }
+
+    const otpCheck = await verifyLatestOtp({ memberNo, otp, email });
+    if (!otpCheck.ok) {
+      return res.status(otpCheck.status).json({ message: otpCheck.message });
+    }
+
+    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    const existingUser = await dbPool.query(
+      `SELECT id FROM pb_users WHERE upper(member_no) = $1 ORDER BY id DESC LIMIT 1`,
+      [memberNo]
+    );
+
+    if (existingUser.rows.length > 0) {
+      await dbPool.query(
+        `UPDATE pb_users
+         SET email = $1,
+             mobile_no = $2,
+             otp = $3,
+             password = $4,
+             role = COALESCE(role, 'USER')
+         WHERE id = $5`,
+        [email, mobileNo, Number(otp), passwordHash, existingUser.rows[0].id]
+      );
+    } else {
+      await dbPool.query(
+        `INSERT INTO pb_users (email, member_no, mobile_no, otp, password, role, input_date)
+         VALUES ($1, $2, $3, $4, $5, 'USER', CURRENT_DATE)`,
+        [email, memberNo, mobileNo, Number(otp), passwordHash]
+      );
+    }
+
+    await markMemberOtpsUsed(memberNo);
+
+    return res.status(201).json({
+      success: true,
+      message: 'Account created successfully. You can now log in.',
+    });
+  } catch (error) {
+    console.error('? Local account registration failed:', error.message);
+    return res.status(500).json({ message: 'Unable to create the account right now. Please try again later.' });
+  }
+});
 // ============================================
 // LOCAL ENDPOINT: REGISTER/SEND OTP
 // ============================================
@@ -1533,16 +1718,19 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`\n🌱 Spring Boot backend: ${SPRING_API_BASE}`);
   console.log(`🔄 Live remote server:  ${LIVE_API_BASE}`);
   console.log(`\n✅ SPRING BOOT ENDPOINTS (→ localhost:8080):`);
-  console.log(`   POST   /api/v1/auth/registerOtp  →  POST /api/v1/auth/registerOtp`);
-  console.log(`   POST   /api/v1/auth/change-password  →  PUT /api/v1/auth/changePassword`);
   console.log(`   POST   /api/v1/auth/authenticate`);
-  console.log(`   POST   /api/v1/auth/register`);
   console.log(`\n📄 LOCAL ENDPOINTS (handled here):`);
+  console.log(`   POST   /api/v1/auth/registerOtp`);
+  console.log(`   POST   /api/v1/auth/change-password`);
+  console.log(`   POST   /api/v1/auth/register`);
   console.log(`   POST   /api/v1/loan-statement-direct`);
   console.log(`   POST   /api/v1/withdrawable-statement-direct`);
   console.log(`\n🧪 TEST ENDPOINT: http://localhost:${port}/api/v1/test`);
   console.log(`${'='.repeat(60)}\n`);
 });
+
+
+
 
 
 

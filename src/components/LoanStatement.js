@@ -396,6 +396,7 @@ function LoanStatement() {
           sdate: loan.sdate,
           edate: loan.edate,
           period: loan.period,
+          payMode: formatPayMode(loan.payMode),
           principal: formatCurrency(loan.originalAmount),
           outstanding: formatCurrency(loan.balance),
           status: loan.status,
@@ -408,6 +409,7 @@ function LoanStatement() {
         sdate: '',
         edate: '',
         period: '',
+        payMode: '',
         principal: formatCurrency(totalLoanAmount),
         outstanding: formatCurrency(totalOutstanding),
         status: '',
@@ -566,7 +568,7 @@ function LoanStatement() {
     };
   }, []);
 
-  // Calculate totals for active loans only
+  // Calculate totals for open loans only
   const totalLoanAmount = loanData.reduce((sum, loan) => sum + (loan.originalAmount || 0), 0);
   const totalOutstanding = loanData.reduce((sum, loan) => sum + (loan.balance || 0), 0);
 
@@ -777,7 +779,7 @@ function LoanStatement() {
         }
         .report-header h1 { font-size: 1.25rem; margin: 0; }
         .contact-info { font-size: 0.7rem; margin-top: 0.5rem; }
-        
+
         .table-responsive {
           width: 100%;
           overflow-x: auto;

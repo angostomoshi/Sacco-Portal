@@ -30,6 +30,16 @@ function ShareCapital() {
     }
     
     // Format transactions correctly based on the actual field names from the API
+    const parseDateForSort = (value) => {
+      if (!value || value === 'N/A') return 0;
+      if (/^\d{2}\/\d{2}\/\d{4}$/.test(value)) {
+        const [day, month, year] = value.split('/');
+        return new Date(Number(year), Number(month) - 1, Number(day)).getTime();
+      }
+      const time = new Date(value).getTime();
+      return Number.isNaN(time) ? 0 : time;
+    };
+
     const formattedTransactions = transactions.map((item, index) => {
       // Calculate net amount (credit - debit)
       const creditAmount = parseFloat(item?.credit || 0);
@@ -49,7 +59,7 @@ function ShareCapital() {
         debit: debitAmount,
         runningAmt: parseFloat(item?.runningAmt || item?.runningTotal || item?.balance || item?.runningBalance || 0)
       };
-    });
+    }).sort((a, b) => parseDateForSort(a.inputDate) - parseDateForSort(b.inputDate));
     
     setShareTransactions(formattedTransactions);
     
