@@ -29,7 +29,7 @@ app.disable('etag');
 
 // Logging middleware
 app.use((req, res, next) => {
-  console.log(`\n📡 ${req.method} ${req.url}`);
+  console.log(`\n?? ${req.method} ${req.url}`);
   if (req.body && Object.keys(req.body).length > 0) {
     console.log(`   Body:`, req.body);
   }
@@ -49,9 +49,9 @@ const dbPool = new Pool({
 
 dbPool.connect((err) => {
   if (err) {
-    console.error('❌ Database connection failed:', err.message);
+    console.error('? Database connection failed:', err.message);
   } else {
-    console.log('✅ Database connected successfully');
+    console.log('? Database connected successfully');
   }
 });
 
@@ -164,7 +164,7 @@ async function sendOtpEmail({ recipientEmail, recipientName, memberNo, otpCode }
 // LOAN APPLICATION EMAIL NOTIFICATIONS
 // ============================================
 async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount, period, repayment, total }) {
-  console.log(`\n📧 [LOAN EMAIL] Sending loan application notifications for: ${memberNo}`);
+  console.log(`\n?? [LOAN EMAIL] Sending loan application notifications for: ${memberNo}`);
 
   try {
     // 1. Fetch applicant's email from the member register
@@ -202,19 +202,19 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
     const appliedDate  = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' });
     const formatKES = (val) => Number(val).toLocaleString('en-KE', { minimumFractionDigits: 2 });
 
-    // ── Applicant confirmation email ──────────────────────────────────────
+    // -- Applicant confirmation email --------------------------------------
     if (applicantEmail) {
       await transport.sendMail({
         from: sender,
         to: applicantEmail,
-        subject: `Metro Sacco – Instant Loan Application Received (${loanNo})`,
+        subject: `Metro Sacco � Instant Loan Application Received (${loanNo})`,
         text: [
           `Dear ${applicantName},`,
           ``,
           `Your instant loan application has been received and is pending approval.`,
           ``,
           `LOAN APPLICATION SUMMARY`,
-          `─────────────────────────────────`,
+          `---------------------------------`,
           `Loan Number   : ${loanNo}`,
           `Member No     : ${memberNo}`,
           `Amount Applied: KES ${formatKES(amount)}`,
@@ -223,7 +223,7 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
           `Total Repay.  : KES ${formatKES(total)}`,
           `Date Applied  : ${appliedDate}`,
           `Status        : Pending Approval`,
-          `─────────────────────────────────`,
+          `---------------------------------`,
           ``,
           `You will be notified once the loan has been reviewed. For any queries, please contact the Sacco office.`,
           ``,
@@ -253,7 +253,7 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
                   <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Monthly Repay.</td><td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(repayment)}</td></tr>
                   <tr style="background:#f9fafb"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Total Repay.</td>  <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(total)}</td></tr>
                   <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Date Applied</td>  <td style="padding:8px 14px;border:1px solid #e5e7eb">${appliedDate}</td></tr>
-                  <tr style="background:#fff7ed"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Status</td>        <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600;color:#d97706">⏳ Pending Approval</td></tr>
+                  <tr style="background:#fff7ed"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Status</td>        <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600;color:#d97706">? Pending Approval</td></tr>
                 </tbody>
               </table>
 
@@ -264,24 +264,24 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
             </div>
           </div>`,
       });
-      console.log(`   ✉️  Applicant confirmation sent to ${applicantEmail}`);
+      console.log(`   ??  Applicant confirmation sent to ${applicantEmail}`);
     } else {
-      console.warn(`   ⚠️  No email address found for member ${memberNo} – skipping applicant email`);
+      console.warn(`   ??  No email address found for member ${memberNo} � skipping applicant email`);
     }
 
-    // ── Admin notification email ──────────────────────────────────────────
+    // -- Admin notification email ------------------------------------------
     const ADMIN_EMAILS = ['sacco@metro-hospital.com', 'pwawerun@gmail.com'];
     await transport.sendMail({
       from: sender,
       to: ADMIN_EMAILS.join(', '),
-      subject: `[ACTION REQUIRED] New Instant Loan Application – ${memberNo} (${loanNo})`,
+      subject: `[ACTION REQUIRED] New Instant Loan Application � ${memberNo} (${loanNo})`,
       text: [
         `Dear Sacco Administrator,`,
         ``,
         `A new instant loan application has been submitted and requires your approval.`,
         ``,
         `LOAN APPLICATION SUMMARY`,
-        `─────────────────────────────────`,
+        `---------------------------------`,
         `Loan Number   : ${loanNo}`,
         `Member No     : ${memberNo}`,
         `Member Name   : ${applicantName}`,
@@ -291,7 +291,7 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
         `Total Repay.  : KES ${formatKES(total)}`,
         `Date Applied  : ${appliedDate}`,
         `Status        : Pending Approval`,
-        `─────────────────────────────────`,
+        `---------------------------------`,
         ``,
         `Please log in to the Sacco administration system to review and approve or decline this application.`,
         ``,
@@ -301,7 +301,7 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
         <div style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.6;max-width:600px;margin:0 auto">
           <div style="background:#b91c1c;padding:24px 32px;border-radius:8px 8px 0 0">
             <h2 style="color:#ffffff;margin:0;font-size:18px">Metropolitan Hospital Sacco Ltd</h2>
-            <p style="color:#fecaca;margin:4px 0 0;font-size:13px">⚠️ Action Required – New Loan Application</p>
+            <p style="color:#fecaca;margin:4px 0 0;font-size:13px">?? Action Required � New Loan Application</p>
           </div>
           <div style="background:#ffffff;padding:28px 32px;border:1px solid #e5e7eb;border-top:none">
             <p>Dear Sacco Administrator,</p>
@@ -322,7 +322,7 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
                 <tr style="background:#f9fafb"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Monthly Repay.</td><td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(repayment)}</td></tr>
                 <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Total Repay.</td>  <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(total)}</td></tr>
                 <tr style="background:#f9fafb"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Date Applied</td>  <td style="padding:8px 14px;border:1px solid #e5e7eb">${appliedDate}</td></tr>
-                <tr style="background:#fff7ed"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Status</td>        <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600;color:#d97706">⏳ Pending Approval</td></tr>
+                <tr style="background:#fff7ed"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Status</td>        <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600;color:#d97706">? Pending Approval</td></tr>
               </tbody>
             </table>
 
@@ -333,11 +333,11 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
           </div>
         </div>`,
     });
-    console.log(`   ✉️  Admin notification sent to ${ADMIN_EMAILS.join(', ')}`);
+    console.log(`   ??  Admin notification sent to ${ADMIN_EMAILS.join(', ')}`);
 
   } catch (emailErr) {
     // Email failure must never crash the loan registration flow
-    console.error('   ❌ [LOAN EMAIL] Failed to send loan application emails:', emailErr.message);
+    console.error('   ? [LOAN EMAIL] Failed to send loan application emails:', emailErr.message);
   }
 }
 
@@ -347,6 +347,7 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
 // Endpoints handled by THIS proxy server locally (PDF generation etc.)
 const LOCAL_ENDPOINTS = [
   '/auth/registerOtp',
+  '/loan/apply',
   '/loan-statement-direct', 
   '/withdrawable-statement-direct',
 ];
@@ -361,14 +362,13 @@ const SPRING_ENDPOINTS = [
   '/auth/change-password',
   '/auth/authenticate',
   '/auth/register',
-  '/loan/apply',
 ];
 
 // ============================================
 // MIDDLEWARE: Route requests
 // ============================================
 app.use('/api/v1', async (req, res, next) => {
-  console.log(`\n🔍 Checking path: ${req.path}`);
+  console.log(`\n?? Checking path: ${req.path}`);
 
   // Check if this is a locally-handled endpoint (PDF etc.)
   const isLocalEndpoint =
@@ -376,7 +376,7 @@ app.use('/api/v1', async (req, res, next) => {
     LOCAL_ENDPOINT_PREFIXES.some(prefix => req.path.startsWith(prefix));
 
   if (isLocalEndpoint) {
-    console.log(`   ✅ Handling locally: ${req.path}`);
+    console.log(`   ? Handling locally: ${req.path}`);
     return next();
   }
 
@@ -384,7 +384,7 @@ app.use('/api/v1', async (req, res, next) => {
   const isSpringEndpoint = SPRING_ENDPOINTS.some(endpoint => req.path.startsWith(endpoint));
 
   if (isSpringEndpoint) {
-    console.log(`   🌱 FORWARDING to Spring Boot: ${req.path}`);
+    console.log(`   ?? FORWARDING to Spring Boot: ${req.path}`);
     try {
       // Map proxy paths to Spring Boot paths
       let springPath = req.path;
@@ -396,7 +396,7 @@ app.use('/api/v1', async (req, res, next) => {
       }
 
       const springUrl = `${SPRING_API_BASE}${springPath}`;
-      console.log(`   🔄 Spring URL: ${springUrl}`);
+      console.log(`   ?? Spring URL: ${springUrl}`);
 
       // Map request body fields to Spring Boot's ChangePasswordRequest
       let springBody = req.body;
@@ -406,7 +406,7 @@ app.use('/api/v1', async (req, res, next) => {
           otp: parseInt(req.body.otp, 10),
           password: req.body.newPassword || req.body.password,
         };
-        console.log(`   📤 Mapped body for Spring Boot:`, springBody);
+        console.log(`   ?? Mapped body for Spring Boot:`, springBody);
       }
 
       // Snapshot original frontend loan fields BEFORE remapping
@@ -445,9 +445,9 @@ app.use('/api/v1', async (req, res, next) => {
         timeout: 30000,
       });
 
-      console.log(`   ✅ Spring Boot response: ${response.status}`);
+      console.log(`   ? Spring Boot response: ${response.status}`);
 
-      // ── Fire-and-forget email notifications for successful loan application ──
+      // -- Fire-and-forget email notifications for successful loan application --
       if (req.path === '/loan/apply' && response.status === 201 && originalLoanBody) {
         const createdLoan = response.data || {};
         setImmediate(() => {
@@ -461,12 +461,12 @@ app.use('/api/v1', async (req, res, next) => {
             total:     originalLoanBody.totalAmount,
           });
         });
-        console.log(`   📧 Email notifications queued for loan application`);
+        console.log(`   ?? Email notifications queued for loan application`);
       }
 
       return res.status(response.status).json(response.data);
     } catch (error) {
-      console.error(`   ❌ Spring Boot error:`, error.message);
+      console.error(`   ? Spring Boot error:`, error.message);
       if (error.response) {
         return res.status(error.response.status).json(error.response.data);
       }
@@ -475,10 +475,10 @@ app.use('/api/v1', async (req, res, next) => {
   }
 
   // Default: Forward to live remote server
-  console.log(`   🔄 FORWARDING to live server: ${req.path}`);
+  console.log(`   ?? FORWARDING to live server: ${req.path}`);
   try {
     const liveUrl = `${LIVE_API_BASE}${req.path}`;
-    console.log(`   🔄 Forwarding to: ${liveUrl}`);
+    console.log(`   ?? Forwarding to: ${liveUrl}`);
 
     const forwardHeaders = {
       'Content-Type': 'application/json',
@@ -504,7 +504,7 @@ app.use('/api/v1', async (req, res, next) => {
       withCredentials: true,
     });
 
-    console.log(`   ✅ Response: ${response.status}`);
+    console.log(`   ? Response: ${response.status}`);
     if (response.headers['set-cookie']) {
       res.setHeader('Set-Cookie', response.headers['set-cookie']);
     }
@@ -628,6 +628,159 @@ app.post('/api/v1/auth/registerOtp', async (req, res) => {
 });
 
 // ============================================
+// LOCAL ENDPOINT: INSTANT LOAN APPLICATION
+// ============================================
+app.post('/api/v1/loan/apply', async (req, res) => {
+  const {
+    memberNo,
+    memberName,
+    loanAmount,
+    periodMonths,
+    interestAmount,
+    totalAmount,
+    monthlyDeduction,
+    loanType,
+  } = req.body || {};
+
+  const amount = Number(loanAmount || 0);
+  const period = Number(periodMonths || 0);
+  const interest = Number(interestAmount || 0);
+  const total = Number(totalAmount || 0);
+  const repayment = Number(monthlyDeduction || 0);
+  const normalizedMemberNo = String(memberNo || '').trim();
+
+  console.log(`\n📝 [LOCAL] Registering instant loan in pb_saccoloan for: ${normalizedMemberNo}`);
+
+  if (!normalizedMemberNo) {
+    return res.status(400).json({ message: 'Member number is required.' });
+  }
+
+  if (!amount || amount <= 0 || !period || period <= 0) {
+    return res.status(400).json({ message: 'Valid loan amount and period are required.' });
+  }
+
+  const client = await dbPool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const memberResult = await client.query(
+      `SELECT acc_no,
+              holders_name,
+              id_no,
+              email_add,
+              tel1,
+              postal_address,
+              postal_code
+       FROM pb_share_register
+       WHERE acc_no = $1`,
+      [normalizedMemberNo]
+    );
+
+    if (memberResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: 'Member record not found.' });
+    }
+
+    const member = memberResult.rows[0];
+    const year = new Date().getFullYear();
+    const nextLoanResult = await client.query(
+      `SELECT COALESCE(MAX(split_part(loan_no, '/', 1)::integer), 0) + 1 AS next_no
+       FROM pb_saccoloan
+       WHERE loan_no ~ $1`,
+      [`^[0-9]+/${year}$`]
+    );
+
+    const loanNo = `${nextLoanResult.rows[0].next_no}/${year}`;
+    const startDate = new Date();
+    const endDate = new Date(startDate);
+    endDate.setMonth(endDate.getMonth() + period);
+    const applicantName = memberName || member.holders_name || normalizedMemberNo;
+
+    await client.query(
+      `INSERT INTO pb_saccoloan (
+         mem_no,
+         member_name,
+         loan_no,
+         postal_address,
+         postal_code,
+         email_address,
+         id_no,
+         lpurpose,
+         pymt_terms,
+         cdate,
+         edate,
+         amount,
+         period,
+         repayment,
+         interest,
+         premium,
+         total,
+         user_name,
+         input_date,
+         charge_int,
+         processed,
+         sms_sent,
+         sms_processed,
+         security
+       )
+       VALUES (
+         $1, $2, $3, $4, $5, $6, $7,
+         $8, 'monthly', $9, $10, $11, $12, $13, $14, $13, $15,
+         'centre', $9, true, false, false, false, 'Shares'
+       )`,
+      [
+        normalizedMemberNo,
+        applicantName,
+        loanNo,
+        member.postal_address || null,
+        member.postal_code || null,
+        member.email_add || null,
+        member.id_no || null,
+        loanType || 'METRO SACCO INSTANT LOAN',
+        startDate,
+        endDate,
+        amount,
+        period,
+        repayment,
+        interest,
+        total,
+      ]
+    );
+
+    await client.query('COMMIT');
+
+    setImmediate(() => {
+      sendLoanApplicationEmails({
+        memberNo: normalizedMemberNo,
+        memberName: applicantName,
+        loanNo,
+        amount,
+        period,
+        repayment,
+        total,
+      });
+    });
+
+    return res.status(201).json({
+      success: true,
+      loanNo,
+      loanNumber: loanNo,
+      message: 'Instant loan application registered successfully.',
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('❌ Failed to register instant loan locally:', error.message);
+    return res.status(500).json({
+      message: 'We could not register the loan application right now.',
+      error: error.message,
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// ============================================
 // LOCAL ENDPOINT: ACTIVE INSTANT LOANS
 // ============================================
 app.get('/api/v1/instant/:memberNo', async (req, res) => {
@@ -696,7 +849,7 @@ app.get('/api/v1/loan-applications/:memberNo', async (req, res) => {
               COALESCE(total, amount, 0) AS "outStanding",
               true AS "isPending",
               'Pending Approval' AS status
-       FROM pb_saccoloan1
+       FROM pb_saccoloan
        WHERE mem_no = $1
          AND COALESCE(processed, false) = false
        ORDER BY cdate DESC, id DESC`,
@@ -1346,3 +1499,6 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`\n🧪 TEST ENDPOINT: http://localhost:${port}/api/v1/test`);
   console.log(`${'='.repeat(60)}\n`);
 });
+
+
+
