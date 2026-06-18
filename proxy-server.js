@@ -163,7 +163,7 @@ async function sendOtpEmail({ recipientEmail, recipientName, memberNo, otpCode }
 // ============================================
 // LOAN APPLICATION EMAIL NOTIFICATIONS
 // ============================================
-async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount, period, repayment, total }) {
+async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount, period, repayment, total, payMode }) {
   console.log(`\n?? [LOAN EMAIL] Sending loan application notifications for: ${memberNo}`);
 
   try {
@@ -248,6 +248,7 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
                 <tbody>
                   <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Loan Number</td>   <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${loanNo}</td></tr>
                   <tr style="background:#f9fafb"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Member No</td>     <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${memberNo}</td></tr>
+                  <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Pay Mode</td><td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${payMode || 'N/A'}</td></tr>
                   <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Amount Applied</td><td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(amount)}</td></tr>
                   <tr style="background:#f9fafb"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Period</td>        <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${period} Month(s)</td></tr>
                   <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Monthly Repay.</td><td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(repayment)}</td></tr>
@@ -285,6 +286,7 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
         `Loan Number   : ${loanNo}`,
         `Member No     : ${memberNo}`,
         `Member Name   : ${applicantName}`,
+        `Pay Mode      : ${payMode || 'N/A'}`,
         `Amount Applied: KES ${formatKES(amount)}`,
         `Period        : ${period} Month(s)`,
         `Monthly Rep.  : KES ${formatKES(repayment)}`,
@@ -317,6 +319,7 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
                 <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Loan Number</td>   <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${loanNo}</td></tr>
                 <tr style="background:#f9fafb"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Member No</td>     <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${memberNo}</td></tr>
                 <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Member Name</td>   <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${applicantName}</td></tr>
+                <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Pay Mode</td><td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${payMode || 'N/A'}</td></tr>
                 <tr style="background:#f9fafb"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Amount Applied</td><td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(amount)}</td></tr>
                 <tr><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Period</td>        <td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">${period} Month(s)</td></tr>
                 <tr style="background:#f9fafb"><td style="padding:8px 14px;border:1px solid #e5e7eb;color:#6b7280">Monthly Repay.</td><td style="padding:8px 14px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(repayment)}</td></tr>
@@ -421,6 +424,10 @@ app.use('/api/v1', async (req, res, next) => {
           repayment: req.body.monthlyDeduction,
           total: req.body.totalAmount,
           interest: req.body.interestAmount,
+          loanType: 'METRO SACCO INSTANT LOAN',
+          loanPurpose: 'METRO SACCO INSTANT LOAN',
+          purpose: 'METRO SACCO INSTANT LOAN',
+          lpurpose: 'METRO SACCO INSTANT LOAN',
         };
         console.log(`   Mapped loan application body for Spring Boot:`, springBody);
       }
@@ -459,6 +466,7 @@ app.use('/api/v1', async (req, res, next) => {
             period:    originalLoanBody.periodMonths,
             repayment: originalLoanBody.monthlyDeduction,
             total:     originalLoanBody.totalAmount,
+            payMode:   originalLoanBody.wstation || originalLoanBody.payMode,
           });
         });
         console.log(`   ?? Email notifications queued for loan application`);
@@ -639,7 +647,8 @@ app.post('/api/v1/loan/apply', async (req, res) => {
     interestAmount,
     totalAmount,
     monthlyDeduction,
-    loanType,
+    payMode,
+    wstation,
   } = req.body || {};
 
   const amount = Number(loanAmount || 0);
@@ -648,6 +657,12 @@ app.post('/api/v1/loan/apply', async (req, res) => {
   const total = Number(totalAmount || 0);
   const repayment = Number(monthlyDeduction || 0);
   const normalizedMemberNo = String(memberNo || '').trim();
+  const rawPayMode = String(wstation || payMode || 'N/A').trim() || 'N/A';
+  const normalizedPayMode = rawPayMode.toLowerCase() === 'checkoff'
+    ? 'Check off'
+    : rawPayMode === 'N/A'
+      ? 'N/A'
+      : rawPayMode.charAt(0).toUpperCase() + rawPayMode.slice(1).toLowerCase();
 
   console.log(`\n📝 [LOCAL] Registering instant loan in pb_saccoloan for: ${normalizedMemberNo}`);
 
@@ -683,6 +698,25 @@ app.post('/api/v1/loan/apply', async (req, res) => {
     }
 
     const member = memberResult.rows[0];
+    const existingPendingResult = await client.query(
+      `SELECT loan_no
+       FROM pb_saccoloan
+       WHERE mem_no = $1
+         AND COALESCE(processed, false) = false
+         AND upper(coalesce(lpurpose, '')) = 'METRO SACCO INSTANT LOAN'
+       ORDER BY id DESC
+       LIMIT 1`,
+      [normalizedMemberNo]
+    );
+
+    if (existingPendingResult.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        message: `You already have a pending instant loan application (${existingPendingResult.rows[0].loan_no}). Please wait for approval before applying again.`,
+        loanNo: existingPendingResult.rows[0].loan_no,
+      });
+    }
+
     const year = new Date().getFullYear();
     const nextLoanResult = await client.query(
       `SELECT COALESCE(MAX(split_part(loan_no, '/', 1)::integer), 0) + 1 AS next_no
@@ -722,12 +756,13 @@ app.post('/api/v1/loan/apply', async (req, res) => {
          processed,
          sms_sent,
          sms_processed,
+         wstation,
          security
        )
        VALUES (
          $1, $2, $3, $4, $5, $6, $7,
-         $8, 'monthly', $9, $10, $11, $12, $13, $14, $13, $15,
-         'centre', $9, true, false, false, false, 'Shares'
+         'METRO SACCO INSTANT LOAN', 'monthly', $8, $9, $10, $11, $12, $13, $12, $14,
+         'centre', $8, true, false, false, false, $15, 'Shares'
        )`,
       [
         normalizedMemberNo,
@@ -737,7 +772,6 @@ app.post('/api/v1/loan/apply', async (req, res) => {
         member.postal_code || null,
         member.email_add || null,
         member.id_no || null,
-        loanType || 'METRO SACCO INSTANT LOAN',
         startDate,
         endDate,
         amount,
@@ -745,6 +779,7 @@ app.post('/api/v1/loan/apply', async (req, res) => {
         repayment,
         interest,
         total,
+        normalizedPayMode,
       ]
     );
 
@@ -759,6 +794,7 @@ app.post('/api/v1/loan/apply', async (req, res) => {
         period,
         repayment,
         total,
+        payMode: normalizedPayMode,
       });
     });
 
@@ -790,17 +826,18 @@ app.get('/api/v1/instant/:memberNo', async (req, res) => {
   try {
     const activeLoanResult = await dbPool.query(
       `SELECT loan_no AS "loanNo",
-              initcap(lpurpose) AS "loanPurpose",
+              upper(lpurpose) AS "loanPurpose",
               cdate AS "startDate",
               edate AS "endDate",
               period,
               amount,
+              COALESCE(NULLIF(wstation, ''), 'N/A') AS "payMode",
               SUM(balance - credit_bal) AS "outStanding"
        FROM ac_debtors, pb_saccoloan
        WHERE mem_no = account_no
          AND invoice_no = loan_no
          AND account_no = $1
-       GROUP BY loan_no, lpurpose, amount, cdate, edate, period
+       GROUP BY loan_no, lpurpose, amount, cdate, edate, period, wstation
        HAVING SUM(balance - credit_bal) <> 0
        ORDER BY cdate`,
       [memberNo]
@@ -838,7 +875,7 @@ app.get('/api/v1/loan-applications/:memberNo', async (req, res) => {
   try {
     const pendingResult = await dbPool.query(
       `SELECT loan_no AS "loanNo",
-              initcap(lpurpose) AS "loanPurpose",
+              upper(lpurpose) AS "loanPurpose",
               cdate AS "startDate",
               edate AS "endDate",
               period,
@@ -846,6 +883,7 @@ app.get('/api/v1/loan-applications/:memberNo', async (req, res) => {
               total,
               repayment,
               interest,
+              COALESCE(NULLIF(wstation, ''), 'N/A') AS "payMode",
               COALESCE(total, amount, 0) AS "outStanding",
               true AS "isPending",
               'Pending Approval' AS status
@@ -884,6 +922,8 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
     period: requestedPeriod,
     status: requestedStatus,
     isPending: requestedIsPending,
+    payMode: requestedPayMode,
+    interestRate: requestedInterestRate,
   } = req.body;
   console.log(`\n📄 [LOCAL] Generating PDF for Loan: ${loanNo}`);
   
@@ -892,7 +932,7 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
     const organisationName = headerResult.rows[0]?.header_name || 'METROPOLITAN HOSPITAL SACCO LTD';
     
     let loanResult = await dbPool.query(
-      `SELECT lpurpose as purpose, amount, cdate as start_date, edate as end_date, period, interest
+      `SELECT lpurpose as purpose, amount, cdate as start_date, edate as end_date, period, interest, wstation
        FROM pb_saccoloan WHERE loan_no = $1`,
       [loanNo]
     );
@@ -906,6 +946,7 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
                 edate as end_date,
                 period,
                 interest,
+                wstation,
                 repayment,
                 total
          FROM pb_saccoloan1
@@ -926,6 +967,8 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
     const displayPurpose = requestedPurpose || loan.purpose || 'N/A';
     const displayPeriod = requestedPeriod ?? loan.period ?? 0;
     const displayStatus = requestedStatus || (requestedIsPending || isPendingApplication ? 'Pending Approval' : 'Active');
+    const displayPayMode = requestedPayMode || loan.wstation || 'N/A';
+    const displayInterestRate = requestedInterestRate ?? 4.5;
     
     const memberResult = await dbPool.query(
       `SELECT holders_name, id_no, tel1, email_add, acc_no 
@@ -1111,7 +1154,8 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
     const loanInfoRows = [
       ['Loan Number', loanNo, 'Purpose', displayPurpose],
       ['Principal', `KES ${formatMoney(displayPrincipal)}`, 'Outstanding', `KES ${formatMoney(displayOutstanding)}`],
-      ['Interest Rate', `${loan.interest || 0}%`, 'Period', `${displayPeriod || 0} months`],
+      ['Interest Rate', `${Number(displayInterestRate).toFixed(2)}% / month`, 'Period', `${displayPeriod || 0} months`],
+      ['Pay Mode', displayPayMode, '', ''],
       ['Start Date', loan.start_date ? new Date(loan.start_date).toLocaleDateString('en-GB') : 'N/A', 'End Date', loan.end_date ? new Date(loan.end_date).toLocaleDateString('en-GB') : 'N/A'],
       ['Status', displayStatus, '', ''],
     ];
@@ -1499,6 +1543,15 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`\n🧪 TEST ENDPOINT: http://localhost:${port}/api/v1/test`);
   console.log(`${'='.repeat(60)}\n`);
 });
+
+
+
+
+
+
+
+
+
 
 
 

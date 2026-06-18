@@ -9,6 +9,7 @@ function ApplyLoan() {
   const [loading, setLoading] = useState(true);
   const [loanAmount, setLoanAmount] = useState('');
   const [period, setPeriod] = useState('');
+  const [payMode, setPayMode] = useState('');
   const [totalAmount, setTotalAmount] = useState('');
   const [monthlyDeduction, setMonthlyDeduction] = useState('');
   const [showResults, setShowResults] = useState(false);
@@ -21,6 +22,21 @@ function ApplyLoan() {
   const MIN_AMOUNT = 1000;
   const MAX_AMOUNT = 50000;
   const MAX_PERIOD = 6;
+  const PAY_MODES = [
+    { value: 'N/A', label: 'N/A' },
+    { value: 'checkoff', label: 'Check off' },
+    { value: 'offline', label: 'Offline' },
+    { value: 'hybrid', label: 'Hybrid' },
+    { value: 'dividend', label: 'Dividend' },
+  ];
+
+  // Format pay mode for display - keep backend values stable while showing friendly labels.
+  const formatPayMode = (mode) => {
+    if (!mode) return '';
+    if (mode === 'N/A') return 'N/A';
+    if (String(mode).toLowerCase() === 'checkoff') return 'Check off';
+    return mode.charAt(0).toUpperCase() + mode.slice(1).toLowerCase();
+  };
 
   // Use relative URL - this will go through the proxy
   const API_BASE_URL = '/api/v1';
@@ -143,6 +159,12 @@ function ApplyLoan() {
       return false;
     }
 
+    if (!payMode) {
+      setSubmitMessage('Please select a pay mode.');
+      setSubmitMessageType('error');
+      return false;
+    }
+
     return true;
   };
 
@@ -167,7 +189,12 @@ function ApplyLoan() {
     const loanApplication = {
       memberNo: memberNumber,
       memberName: memberName,
-      loanType: 'INSTANT LOAN',
+      loanType: 'METRO SACCO INSTANT LOAN',
+      loanPurpose: 'METRO SACCO INSTANT LOAN',
+      purpose: 'METRO SACCO INSTANT LOAN',
+      lpurpose: 'METRO SACCO INSTANT LOAN',
+      payMode: payMode,
+      wstation: formatPayMode(payMode),
       loanAmount: parseFloat(loanAmount),
       periodMonths: parseFloat(period),
       interestRate: INTEREST_RATE,
@@ -179,6 +206,27 @@ function ApplyLoan() {
     };
 
     try {
+      const pendingResponse = await fetch(`${API_BASE_URL}/loan-applications/${memberNumber}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
+        }
+      });
+
+      if (pendingResponse.ok) {
+        const pendingData = await pendingResponse.json();
+        const pendingLoans = Array.isArray(pendingData?.data) ? pendingData.data : [];
+        const existingPendingInstantLoan = pendingLoans.find((loan) => {
+          const purpose = String(loan.loanPurpose || loan.purpose || '').toUpperCase();
+          return purpose.includes('INSTANT LOAN');
+        });
+
+        if (existingPendingInstantLoan) {
+          throw new Error(`You already have a pending instant loan application (${existingPendingInstantLoan.loanNo || 'awaiting approval'}). Please wait for approval before applying again.`);
+        }
+      }
+
       console.log('=== LOAN APPLICATION DEBUG ===');
       console.log('Submitting loan application to API:', loanApplication);
       console.log('API URL:', `${API_BASE_URL}/loan/apply`);
@@ -216,6 +264,7 @@ function ApplyLoan() {
         setTimeout(() => {
           setLoanAmount('');
           setPeriod('');
+          setPayMode('');
           setTotalAmount('');
           setMonthlyDeduction('');
           setShowResults(false);
@@ -291,14 +340,6 @@ function ApplyLoan() {
           <form onSubmit={handleSubmit}>
             <div className="calculator-row">
               <div className="calculator-field">
-                <label>Category</label>
-                <div className="category-display">
-                  <span className="category-badge">INSTANT LOAN</span>
-                  <span className="category-limits">(Max: KES 50,000 | Max: 6 months | Interest: 4.5%/month)</span>
-                </div>
-              </div>
-
-              <div className="calculator-field">
                 <label>Amount (KES)</label>
                 <input
                   type="number"
@@ -333,10 +374,25 @@ function ApplyLoan() {
                   <option value="6">6 months</option>
                 </select>
               </div>
+
+              <div className="calculator-field">
+                <label>Pay Mode</label>
+                <select
+                  className="calculator-select"
+                  value={payMode}
+                  onChange={(e) => setPayMode(e.target.value)}
+                  required
+                >
+                  <option value="">Select pay mode</option>
+                  {PAY_MODES.map((mode) => (
+                    <option key={mode.value} value={mode.value}>{mode.label}</option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <div className="loan-info">
-              <div className="info-icon">ℹ️</div>
+              <div className="info-icon">i</div>
               <div className="info-text">
                 <strong>Instant Loan Features:</strong> Minimum KES 1,000 | Maximum KES 50,000 | Maximum repayment period 6 months | Interest rate 4.5% per month
               </div>
@@ -395,24 +451,21 @@ function ApplyLoan() {
         .member-info-item label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: #718096; }
         .member-value { font-size: 1.125rem; font-weight: 600; color: #1a202c; padding: 0.25rem 0; border-bottom: 2px solid #e2e8f0; }
         .calculator-card { background: white; border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .calculator-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 1rem; align-items: end; }
+        .calculator-row { display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 1rem; align-items: end; }
         .calculator-field { display: flex; flex-direction: column; gap: 0.5rem; }
         .calculator-field label { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; color: #718096; }
-        .category-badge { display: inline-block; font-size: 0.875rem; font-weight: 700; color: ${brandColor}; padding: 0.5rem 0; border-bottom: 2px solid ${brandColor}; }
-        .category-limits { font-size: 0.7rem; color: #718096; }
-        .calculator-input, .calculator-select { padding: 0.625rem; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.875rem; }
+
+        .calculator-input, .calculator-select { width: 100%; min-width: 0; padding: 0.7rem 0.75rem; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.875rem; background: #ffffff; }
         .calculator-input:focus, .calculator-select:focus { outline: none; border-color: ${brandColor}; }
-        .loan-info { margin-top: 1rem; padding: 0.75rem; background: #ebf8ff; border-radius: 8px; display: flex; gap: 0.5rem; }
-        .info-text { font-size: 0.75rem; color: #2c5282; }
+        .loan-info { margin-top: 1rem; padding: 0.85rem 1rem; background: #ebf8ff; border: 1px solid #bee3f8; border-radius: 10px; display: flex; align-items: flex-start; gap: 0.75rem; }
+        .info-icon { width: 22px; height: 22px; border-radius: 50%; background: ${brandColor}; color: #ffffff; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; font-size: 0.75rem; font-weight: 800; line-height: 1; }
+        .info-text { font-size: 0.78rem; color: #2c5282; line-height: 1.55; }
         .results-section { margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid #e2e8f0; }
         .results-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 2rem; }
         .result-value { font-size: 1.5rem; font-weight: 700; color: ${brandColor}; padding: 0.5rem 0; border-bottom: 2px solid #e2e8f0; }
         .submit-btn { width: 100%; margin-top: 1.5rem; padding: 0.875rem; background: ${brandColor}; color: white; border: none; border-radius: 8px; font-size: 0.875rem; font-weight: 600; cursor: pointer; }
         .submit-btn:hover:not(:disabled) { background: #008a9a; }
         .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .submit-message { margin-top: 1rem; padding: 0.75rem; border-radius: 8px; font-size: 0.875rem; }
-        .submit-message.success { background-color: #c6f6d5; color: #22543d; }
-        .submit-message.error { background-color: #fed7d7; color: #742a2a; }
         @media (max-width: 768px) {
           .calculator-row { grid-template-columns: 1fr; }
           .member-info-row { grid-template-columns: 1fr; }
@@ -424,3 +477,4 @@ function ApplyLoan() {
 }
 
 export default ApplyLoan;
+

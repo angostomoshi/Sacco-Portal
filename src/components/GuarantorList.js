@@ -2,6 +2,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
+import Alert from './Alert';
 
 function GuarantorList() {
   const reportRef = useRef();
@@ -206,12 +207,12 @@ function GuarantorList() {
             const currentGuarantors = { guarantors: guarantorData, totals: totals };
             localStorage.setItem('guarantorTransactions', JSON.stringify(currentGuarantors));
           } else {
-            setError('No guarantor records found for this member');
+            setError('There are no guarantor records available for this member right now.');
             setGuarantorData([]);
             setTotals({ totalLoanAmount: 0, totalAmountGuaranteed: 0, totalOutstanding: 0 });
           }
         } else {
-          setError('No guarantor data available for this member');
+            setError('We could not find any guarantor data for this member right now.');
           setGuarantorData([]);
           setTotals({ totalLoanAmount: 0, totalAmountGuaranteed: 0, totalOutstanding: 0 });
         }
@@ -359,8 +360,11 @@ function GuarantorList() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan="8" style={{ textAlign: 'center', padding: '2rem', fontWeight: 'bold' }}>
-                    No guarantor records found
+                  <td colSpan="8" style={{ padding: '1.5rem' }}>
+                    <div className="empty-state">
+                      <strong>No guarantor records yet</strong>
+                      <span>You are not currently listed as a guarantor on any loan.</span>
+                    </div>
                   </td>
                 </tr>
               )}
@@ -396,8 +400,10 @@ function GuarantorList() {
 
       {/* Error Message */}
       {error && (
-        <div className="error-message">
-          <span>⚠️</span> {error}
+        <div style={{ maxWidth: '1400px', margin: '1rem auto' }}>
+          <Alert type="warning">
+            {error}
+          </Alert>
         </div>
       )}
 
@@ -531,6 +537,31 @@ function GuarantorList() {
           color: #000;
         }
 
+        .empty-state {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 0.35rem;
+          min-height: 120px;
+          text-align: center;
+          color: #374151;
+          background: #f9fafb;
+          border: 1px dashed #cbd5e1;
+          border-radius: 8px;
+          padding: 1.25rem;
+        }
+
+        .empty-state strong {
+          color: #111827;
+          font-size: 0.95rem;
+        }
+
+        .empty-state span {
+          font-size: 0.82rem;
+          line-height: 1.5;
+        }
+
         .total-row {
           background: #f0f0f0;
           font-weight: 800;
@@ -591,23 +622,6 @@ function GuarantorList() {
           cursor: not-allowed;
         }
 
-        .error-message {
-          margin-top: 1rem;
-          padding: 0.75rem 1rem;
-          background: #fed7d7;
-          border-left: 4px solid #e53e3e;
-          border-radius: 6px;
-          color: #742a2a;
-          font-size: 0.875rem;
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          max-width: 1400px;
-          margin-left: auto;
-          margin-right: auto;
-          font-weight: 500;
-        }
-
         @media print {
           .download-section {
             display: none;
@@ -649,6 +663,11 @@ function GuarantorList() {
           
           .info-label {
             width: auto;
+          }
+
+          .empty-state {
+            min-height: 100px;
+            padding: 1rem;
           }
         }
       `}</style>

@@ -1,6 +1,7 @@
 // LoanStatement.js - Matches Java backend: HAVING sum(balance-credit_bal) <> 0
 import React, { useState, useEffect } from 'react';
 import jsPDF from 'jspdf';
+import { formatPayMode } from '../utils/formatters';
 
 function LoanStatement() {
   const [memberData, setMemberData] = useState(null);
@@ -16,6 +17,17 @@ function LoanStatement() {
   const [pdfBlob, setPdfBlob] = useState(null);
   
   const brandColor = '#00a3b5';
+
+  const normalizeMemberProfile = (profile) => {
+    const member = profile?.data && typeof profile.data === 'object' ? profile.data : profile || {};
+    return {
+      holdersName: member.holdersName || member.holders_name || member.name || member.memberName || member.member_name || '',
+      accNo: member.accNo || member.acc_no || member.memberNo || member.member_no || '',
+      emailAdd: member.emailAdd || member.email_add || member.email || '',
+      tel1: member.tel1 || member.phone || member.mobileNo || member.mobile_no || '',
+      idNo: member.idNo || member.id_no || member.idNumber || member.id_number || '',
+    };
+  };
 
   // Format date only (no time)
   const formatDateOnly = (dateString) => {
@@ -113,6 +125,8 @@ function LoanStatement() {
       period: item.period !== null && item.period !== undefined ? item.period : 'N/A',
       originalAmount: parseFloat(item.amount) || 0,
       balance: getOutstandingValue(item),
+      payMode: item.payMode || item.wstation || 'N/A',
+      interestRate: item.interestRate || item.interest_rate || 4.5,
       status: item.status || (item.isPending ? 'Pending Approval' : getOutstandingValue(item) < 0 ? 'Credit Balance' : 'Active'),
       isPending: Boolean(item.isPending),
     }));
@@ -144,13 +158,15 @@ function LoanStatement() {
     } catch (err) {
       console.error('Error fetching header config:', err);
     }
-    return {
+    const fallbackHeader = {
       organisationName: 'METROPOLITAN HOSPITAL SACCO LTD',
-      boxNo: 'P.O. Box 12345',
-      postalCode: '00100',
-      mainTelNo: '020-1234567',
-      email: 'info@metro-sacco.com'
+      boxNo: '808',
+      postalCode: '00515, Buru Buru Nairobi',
+      mainTelNo: '0785278786 or 0705767392',
+      email: 'sacco@metro-hospital.com'
     };
+    setHeaderData(fallbackHeader);
+    return fallbackHeader;
   };
 
   const handleViewStatement = async (loan) => {
@@ -185,6 +201,8 @@ function LoanStatement() {
           outstandingBalance: loan.balance,
           purpose: loan.purpose,
           period: loan.period,
+          payMode: loan.payMode,
+          interestRate: loan.interestRate,
           status: loan.status,
           isPending: loan.isPending,
         })
@@ -300,14 +318,15 @@ function LoanStatement() {
       };
 
       const loanColumns = [
-        { label: 'Loan No', key: 'loanNo', width: 30, align: 'left' },
-        { label: 'Purpose', key: 'purpose', width: 48, align: 'left' },
-        { label: 'Start Date', key: 'sdate', width: 24, align: 'left' },
-        { label: 'End Date', key: 'edate', width: 24, align: 'left' },
-        { label: 'Period', key: 'period', width: 18, align: 'center' },
-        { label: 'Principal (KES)', key: 'principal', width: 38, align: 'right' },
-        { label: 'Outstanding (KES)', key: 'outstanding', width: 42, align: 'right' },
-        { label: 'Status', key: 'status', width: tableWidth - 224, align: 'left' },
+        { label: 'Loan No', key: 'loanNo', width: 28, align: 'left' },
+        { label: 'Purpose', key: 'purpose', width: 42, align: 'left' },
+        { label: 'Start Date', key: 'sdate', width: 22, align: 'left' },
+        { label: 'End Date', key: 'edate', width: 22, align: 'left' },
+        { label: 'Period', key: 'period', width: 16, align: 'center' },
+        { label: 'Pay Mode', key: 'payMode', width: 30, align: 'left' },
+        { label: 'Principal (KES)', key: 'principal', width: 35, align: 'right' },
+        { label: 'Outstanding (KES)', key: 'outstanding', width: 38, align: 'right' },
+        { label: 'Status', key: 'status', width: tableWidth - 233, align: 'left' },
       ];
 
       const drawLoanTableHeader = () => {
@@ -420,6 +439,15 @@ function LoanStatement() {
       try {
         let token = localStorage.getItem('authToken');
         let memberNumber = localStorage.getItem('memberNumber');
+
+        const cachedProfile = localStorage.getItem('memberProfile');
+        if (cachedProfile) {
+          try {
+            setMemberData(normalizeMemberProfile(JSON.parse(cachedProfile)));
+          } catch (parseErr) {
+            console.error('Failed to parse cached member profile:', parseErr);
+          }
+        }
         
         if (!token) {
           const storedMemberData = localStorage.getItem('memberData');
@@ -453,7 +481,7 @@ function LoanStatement() {
           });
           
           if (memberResponse.ok) {
-            const member = await memberResponse.json();
+            const member = normalizeMemberProfile(await memberResponse.json());
             setMemberData(member);
             localStorage.setItem('memberProfile', JSON.stringify(member));
           }
@@ -622,6 +650,7 @@ function LoanStatement() {
                   <th>Start Date</th>
                   <th>End Date</th>
                   <th>Period (Months)</th>
+                  <th>Pay Mode</th>
                   <th>Principal (KES)</th>
                   <th>Outstanding Balance (KES)</th>
                   <th>Status</th>
@@ -636,6 +665,7 @@ function LoanStatement() {
                     <td data-label="Start Date">{loan.sdate}</td>
                     <td data-label="End Date">{loan.edate}</td>
                     <td data-label="Period">{loan.period}</td>
+                    <td data-label="Pay Mode"><strong>{formatPayMode(loan.payMode)}</strong></td>
                     <td data-label="Principal" className="amount"><strong>{formatCurrency(loan.originalAmount)}</strong></td>
                     <td data-label="Outstanding Balance" className="amount" style={{ color: '#e53e3e', fontWeight: 'bold' }}>
                       {formatCurrency(loan.balance)}
@@ -655,7 +685,7 @@ function LoanStatement() {
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan="9" style={{ textAlign: 'center', padding: '2rem' }}>
+                    <td colSpan="10" style={{ textAlign: 'center', padding: '2rem' }}>
                       <div className="statement-empty-state">
                         <strong>No open loan balances right now</strong>
                         <span>{error || 'You do not have any loan with a non-zero balance at the moment.'}</span>
@@ -667,7 +697,7 @@ function LoanStatement() {
               {loanData.length > 0 && (
                 <tfoot>
                   <tr className="total-row">
-                    <td colSpan="5"><strong>TOTAL OPEN BALANCES</strong></td>
+                    <td colSpan="6"><strong>TOTAL OPEN BALANCES</strong></td>
                     <td className="amount"><strong>{formatCurrency(totalLoanAmount)}</strong></td>
                     <td className="amount"><strong>{formatCurrency(totalOutstanding)}</strong></td>
                     <td></td>

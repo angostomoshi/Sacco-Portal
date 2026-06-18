@@ -3,19 +3,19 @@ import React from 'react';
 const alertMeta = {
   info: {
     icon: 'i',
-    title: 'Quick note'
+    title: 'Note'
   },
   success: {
     icon: '✓',
-    title: 'All set'
+    title: 'Success'
   },
   warning: {
     icon: '!',
-    title: 'Please note'
+    title: 'Attention'
   },
   error: {
-    icon: '!',
-    title: 'Something needs attention'
+    icon: '⚠',
+    title: 'Alert'
   }
 };
 
