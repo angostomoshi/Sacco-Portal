@@ -91,7 +91,7 @@ function normalizeProtocol(protocols) {
   return String(protocols || '').trim().toUpperCase();
 }
 
-async function getEmailServerSettings() {
+async function getEmailServerSettingsList() {
   const result = await dbPool.query(
     `SELECT smtp_host,
             smpt_port,
@@ -118,16 +118,20 @@ async function getEmailServerSettings() {
     throw new Error('SMTP settings not configured');
   }
 
-  return result.rows[0];
+  return result.rows;
 }
 
-async function sendOtpEmail({ recipientEmail, recipientName, memberNo, otpCode }) {
-  const emailSettings = await getEmailServerSettings();
+async function getEmailServerSettings() {
+  const settings = await getEmailServerSettingsList();
+  return settings[0];
+}
+
+function createEmailTransport(emailSettings) {
   const protocol = normalizeProtocol(emailSettings.protocols);
   const port = Number(emailSettings.smpt_port || 587);
   const secure = port === 465;
 
-  const transport = nodemailer.createTransport({
+  return nodemailer.createTransport({
     host: emailSettings.smtp_host,
     port,
     secure,
@@ -138,16 +142,44 @@ async function sendOtpEmail({ recipientEmail, recipientName, memberNo, otpCode }
     } : undefined,
     logger: Boolean(emailSettings.smtp_debug),
     debug: Boolean(emailSettings.smtp_debug),
+    connectionTimeout: 20000,
+    greetingTimeout: 20000,
+    socketTimeout: 30000,
   });
+}
 
-  const sender = emailSettings.default_sender || emailSettings.smtp_username;
+async function sendWithSmtpFallback(mailOptions) {
+  const settingsList = await getEmailServerSettingsList();
+  const failures = [];
+
+  for (const emailSettings of settingsList) {
+    const sender = emailSettings.default_sender || emailSettings.smtp_username;
+    const transport = createEmailTransport(emailSettings);
+
+    try {
+      const result = await transport.sendMail({
+        ...mailOptions,
+        from: sender,
+      });
+      console.log(`Email sent via ${emailSettings.smtp_host} as ${sender}`);
+      return result;
+    } catch (error) {
+      const safeFailure = `${emailSettings.smtp_host}/${emailSettings.smtp_username}: ${error.code || ''} ${error.responseCode || ''} ${error.message}`.trim();
+      failures.push(safeFailure);
+      console.error(`Email send failed via ${safeFailure}`);
+    }
+  }
+
+  throw new Error(`All SMTP senders failed: ${failures.join(' | ')}`);
+}
+
+async function sendOtpEmail({ recipientEmail, recipientName, memberNo, otpCode }) {
   const name = recipientName || 'Member';
 
-  return transport.sendMail({
-    from: sender,
+  return sendWithSmtpFallback({
     to: recipientEmail,
     subject: 'Metro Sacco Password Reset OTP',
-    text: `Hello ${name},\n\nYour Metro Sacco password reset OTP is ${otpCode}.\nUse this code to change your password for member number ${memberNo}.\n\nIf you did not request this OTP, please ignore this email.\n\nMetro Sacco`,
+    text: `Hello ${name}\n\nYour Metro Sacco password reset OTP is ${otpCode}.\nUse this code to change your password for member number ${memberNo}.\n\nIf you did not request this OTP, please ignore this email.\n\nMetro Sacco`,
     html: `
       <div style="font-family: Arial, sans-serif; color: #1f2937; line-height: 1.5;">
         <p>Hello ${name},</p>
@@ -160,7 +192,6 @@ async function sendOtpEmail({ recipientEmail, recipientName, memberNo, otpCode }
     `,
   });
 }
-
 // ============================================
 // LOAN APPLICATION EMAIL NOTIFICATIONS
 // ============================================
@@ -1742,6 +1773,7 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`\n🧪 TEST ENDPOINT: http://localhost:${port}/api/v1/test`);
   console.log(`${'='.repeat(60)}\n`);
 });
+
 
 
 
