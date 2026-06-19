@@ -700,11 +700,25 @@ app.post('/api/v1/auth/register', async (req, res) => {
         [email, mobileNo, Number(otp), passwordHash, existingUser.rows[0].id]
       );
     } else {
-      await dbPool.query(
-        `INSERT INTO pb_users (email, member_no, mobile_no, otp, password, role, input_date)
-         VALUES ($1, $2, $3, $4, $5, 'USER', CURRENT_DATE)`,
-        [email, memberNo, mobileNo, Number(otp), passwordHash]
-      );
+      const client = await dbPool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('LOCK TABLE pb_users IN EXCLUSIVE MODE');
+        const nextIdResult = await client.query(`SELECT COALESCE(MAX(id), 0) + 1 AS next_id FROM pb_users`);
+        const nextId = nextIdResult.rows[0].next_id;
+
+        await client.query(
+          `INSERT INTO pb_users (id, email, member_no, mobile_no, otp, password, role, input_date)
+           VALUES ($1, $2, $3, $4, $5, $6, 'USER', CURRENT_DATE)`,
+          [nextId, email, memberNo, mobileNo, Number(otp), passwordHash]
+        );
+        await client.query('COMMIT');
+      } catch (insertError) {
+        await client.query('ROLLBACK');
+        throw insertError;
+      } finally {
+        client.release();
+      }
     }
 
     await markMemberOtpsUsed(memberNo);
@@ -1728,6 +1742,7 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`\n🧪 TEST ENDPOINT: http://localhost:${port}/api/v1/test`);
   console.log(`${'='.repeat(60)}\n`);
 });
+
 
 
 
