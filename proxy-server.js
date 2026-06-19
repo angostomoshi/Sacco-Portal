@@ -173,19 +173,29 @@ async function sendWithSmtpFallback(mailOptions) {
   throw new Error(`All SMTP senders failed: ${failures.join(' | ')}`);
 }
 
-async function sendOtpEmail({ recipientEmail, recipientName, memberNo, otpCode }) {
+async function sendOtpEmail({ recipientEmail, recipientName, memberNo, otpCode, purpose }) {
   const name = recipientName || 'Member';
+  const isCreateAccount = purpose === 'create-account';
+  const subject = isCreateAccount ? 'Metro Sacco Account Setup OTP' : 'Metro Sacco Password Reset OTP';
+  const actionText = isCreateAccount ? 'create your Metro Sacco portal account' : 'change your Metro Sacco portal password';
 
   return sendWithSmtpFallback({
     to: recipientEmail,
-    subject: 'Metro Sacco Password Reset OTP',
-    text: `Hello ${name}\n\nYour Metro Sacco password reset OTP is ${otpCode}.\nUse this code to change your password for member number ${memberNo}.\n\nIf you did not request this OTP, please ignore this email.\n\nMetro Sacco`,
+    subject,
+    text: `Hello ${name}
+
+Your Metro Sacco OTP is ${otpCode}.
+Use this code to ${actionText} for member number ${memberNo}.
+
+If you did not request this OTP, please ignore this email.
+
+Metro Sacco`,
     html: `
       <div style="font-family: Arial, sans-serif; color: #1f2937; line-height: 1.5;">
         <p>Hello ${name},</p>
-        <p>Your Metro Sacco password reset OTP is:</p>
+        <p>Your Metro Sacco OTP is:</p>
         <p style="font-size: 24px; font-weight: 700; letter-spacing: 4px;">${otpCode}</p>
-        <p>Use this code to change your password for member number <strong>${memberNo}</strong>.</p>
+        <p>Use this code to ${actionText} for member number <strong>${memberNo}</strong>.</p>
         <p>If you did not request this OTP, you can ignore this email.</p>
         <p>Metro Sacco</p>
       </div>
@@ -596,12 +606,26 @@ async function getLatestUnusedOtp(memberNo) {
 }
 
 async function verifyLatestOtp({ memberNo, otp, email }) {
-  const otpRecord = await getLatestUnusedOtp(memberNo);
-  if (!otpRecord) {
-    return { ok: false, status: 400, message: 'No active OTP was found. Please request a new OTP.' };
+  const normalizedOtp = Number(String(otp || '').trim());
+  if (!Number.isFinite(normalizedOtp)) {
+    return { ok: false, status: 400, message: 'Invalid OTP. Please check the code sent to your email.' };
   }
 
-  if (Number(otpRecord.pass_key) !== Number(otp)) {
+  const result = await dbPool.query(
+    `SELECT id, pass_key, email, cdate
+     FROM pb_sacco_passkey
+     WHERE member_no = $1
+       AND pass_key = $2
+       AND COALESCE(key_used, false) = false
+       AND COALESCE(logged_in, loged_in, true) = true
+       AND cdate >= NOW() - INTERVAL '30 minutes'
+     ORDER BY cdate DESC NULLS LAST, id DESC
+     LIMIT 1`,
+    [memberNo, normalizedOtp]
+  );
+
+  const otpRecord = result.rows[0];
+  if (!otpRecord) {
     return { ok: false, status: 400, message: 'Invalid OTP. Please check the latest code sent to your email.' };
   }
 
@@ -611,7 +635,6 @@ async function verifyLatestOtp({ memberNo, otp, email }) {
 
   return { ok: true, otpRecord };
 }
-
 async function markMemberOtpsUsed(memberNo) {
   await dbPool.query(
     `UPDATE pb_sacco_passkey
@@ -818,23 +841,43 @@ app.post('/api/v1/auth/registerOtp', async (req, res) => {
       return res.status(400).json({ message: 'No email address is registered for this member account.' });
     }
 
-    await dbPool.query(
-      `UPDATE pb_sacco_passkey
-       SET key_used = true
+    const existingOtpResult = await dbPool.query(
+      `SELECT id, pass_key, cdate
+       FROM pb_sacco_passkey
        WHERE member_no = $1
-         AND logged_in = true
-         AND key_used = false`,
-      [memberNo]
+         AND lower(coalesce(email, '')) = lower($2)
+         AND COALESCE(logged_in, loged_in, true) = true
+         AND COALESCE(key_used, false) = false
+         AND cdate >= NOW() - INTERVAL '10 minutes'
+       ORDER BY cdate DESC NULLS LAST, id DESC
+       LIMIT 1`,
+      [memberNo, member.email]
     );
 
-    const insertResult = await dbPool.query(
-      `INSERT INTO pb_sacco_passkey (member_no, phone_no, email, logged_in, sms_sent, key_used)
-       VALUES ($1, $2, $3, true, false, false)
-       RETURNING id, pass_key, cdate`,
-      [memberNo, member.tel1 || null, member.email]
-    );
+    let otpRecord = existingOtpResult.rows[0];
+    const reusedExistingOtp = Boolean(otpRecord);
 
-    const otpRecord = insertResult.rows[0];
+    if (!otpRecord) {
+      await dbPool.query(
+        `UPDATE pb_sacco_passkey
+         SET key_used = true
+         WHERE member_no = $1
+           AND logged_in = true
+           AND key_used = false`,
+        [memberNo]
+      );
+
+      const insertResult = await dbPool.query(
+        `INSERT INTO pb_sacco_passkey (member_no, phone_no, email, logged_in, sms_sent, key_used)
+         VALUES ($1, $2, $3, true, false, false)
+         RETURNING id, pass_key, cdate`,
+        [memberNo, member.tel1 || null, member.email]
+      );
+
+      otpRecord = insertResult.rows[0];
+    } else {
+      console.log(`   Re-sending existing active OTP ${otpRecord.id} for ${memberNo}`);
+    }
 
     try {
       await sendOtpEmail({
@@ -842,9 +885,12 @@ app.post('/api/v1/auth/registerOtp', async (req, res) => {
         recipientName: member.member_name,
         memberNo,
         otpCode: otpRecord.pass_key,
+        purpose: req.body?.purpose,
       });
     } catch (emailError) {
-      await dbPool.query(`UPDATE pb_sacco_passkey SET key_used = true WHERE id = $1`, [otpRecord.id]);
+      if (!reusedExistingOtp) {
+        await dbPool.query(`UPDATE pb_sacco_passkey SET key_used = true WHERE id = $1`, [otpRecord.id]);
+      }
       console.error('❌ Failed to send OTP email:', emailError.message);
       return res.status(500).json({
         message: 'Failed to send OTP email. Please try again.',
@@ -1773,6 +1819,10 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`\n🧪 TEST ENDPOINT: http://localhost:${port}/api/v1/test`);
   console.log(`${'='.repeat(60)}\n`);
 });
+
+
+
+
 
 
 
