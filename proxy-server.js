@@ -5,6 +5,7 @@ const { Pool } = require('pg');
 const PDFDocument = require('pdfkit');
 const nodemailer = require('nodemailer');
 const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 const port = 3023;
@@ -394,6 +395,7 @@ const LOCAL_ENDPOINTS = [
   '/auth/registerOtp',
   '/auth/change-password',
   '/auth/register',
+  '/auth/authenticate',
   '/loan/apply',
   '/loan-statement-direct', 
   '/withdrawable-statement-direct',
@@ -406,7 +408,6 @@ const LOCAL_ENDPOINT_PREFIXES = [
 
 // Endpoints that must go to the Spring Boot backend (port 8080)
 const SPRING_ENDPOINTS = [
-  '/auth/authenticate',
 ];
 
 // ============================================
@@ -645,6 +646,88 @@ async function markMemberOtpsUsed(memberNo) {
   );
 }
 
+// ============================================
+// LOCAL ENDPOINT: AUTHENTICATE
+// ============================================
+app.post('/api/v1/auth/authenticate', async (req, res) => {
+  const memberNo = normalizeAuthMemberNo(req.body?.memberNo || req.body?.username);
+  const password = String(req.body?.password || '').trim();
+
+  console.log(`\n?? [LOCAL] Authenticating: ${memberNo}`);
+
+  if (!memberNo || !password) {
+    return res.status(400).json({ message: 'Member number and password are required.' });
+  }
+
+  try {
+    const userResult = await dbPool.query(
+      `SELECT id, member_no, email, mobile_no, password, COALESCE(role, 'USER') AS role, input_date
+       FROM pb_users
+       WHERE upper(trim(member_no)) = $1
+       ORDER BY id DESC`,
+      [memberNo]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(401).json({ message: 'Invalid member number or password.' });
+    }
+
+    let matchedUser = null;
+    for (const user of userResult.rows) {
+      if (!user.password) continue;
+      try {
+        const matches = await bcrypt.compare(password, user.password);
+        if (matches) {
+          matchedUser = user;
+          break;
+        }
+      } catch (compareError) {
+        console.error(`Password compare failed for ${memberNo} row ${user.id}:`, compareError.message);
+      }
+    }
+
+    if (!matchedUser) {
+      return res.status(401).json({ message: 'Invalid member number or password.' });
+    }
+
+    const memberResult = await dbPool.query(
+      `SELECT acc_no, holders_name, id_no, email_add, tel1
+       FROM pb_share_register
+       WHERE upper(trim(acc_no)) = $1
+       ORDER BY acc_no
+       LIMIT 1`,
+      [memberNo]
+    );
+
+    const member = memberResult.rows[0] || {};
+    const role = String(matchedUser.role || 'USER').toUpperCase();
+    const token = jwt.sign(
+      {
+        sub: matchedUser.member_no,
+        memberNo: matchedUser.member_no,
+        role,
+        userId: matchedUser.id,
+      },
+      process.env.JWT_SECRET || 'metro-sacco-portal-secret',
+      { expiresIn: '12h' }
+    );
+
+    return res.json({
+      success: true,
+      token,
+      memberNo: matchedUser.member_no,
+      role,
+      id: matchedUser.id,
+      email: matchedUser.email || member.email_add || '',
+      mobileNo: matchedUser.mobile_no || member.tel1 || '',
+      holdersName: member.holders_name || matchedUser.member_no,
+      message: 'Authentication successful.',
+    });
+  } catch (error) {
+    console.error('? Local authentication failed:', error.message);
+    return res.status(500).json({ message: 'Unable to sign in right now. Please try again later.' });
+  }
+});
 // ============================================
 // LOCAL ENDPOINT: CHANGE PASSWORD
 // ============================================
@@ -1809,8 +1892,8 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`\n🌱 Spring Boot backend: ${SPRING_API_BASE}`);
   console.log(`🔄 Live remote server:  ${LIVE_API_BASE}`);
   console.log(`\n✅ SPRING BOOT ENDPOINTS (→ localhost:8080):`);
-  console.log(`   POST   /api/v1/auth/authenticate`);
   console.log(`\n📄 LOCAL ENDPOINTS (handled here):`);
+  console.log(`   POST   /api/v1/auth/authenticate`);
   console.log(`   POST   /api/v1/auth/registerOtp`);
   console.log(`   POST   /api/v1/auth/change-password`);
   console.log(`   POST   /api/v1/auth/register`);
@@ -1819,6 +1902,8 @@ app.listen(port, '0.0.0.0', () => {
   console.log(`\n🧪 TEST ENDPOINT: http://localhost:${port}/api/v1/test`);
   console.log(`${'='.repeat(60)}\n`);
 });
+
+
 
 
 
