@@ -59,6 +59,31 @@ dbPool.connect((err) => {
 
 const LIVE_API_BASE = process.env.LIVE_API_BASE || 'http://192.168.4.10:8080/api/v1';
 const SPRING_API_BASE = process.env.SPRING_API_BASE || 'http://192.168.4.10:8080/api/v1';
+const PROXY_JWT_SECRET = process.env.JWT_SECRET || 'metro-sacco-portal-secret';
+
+function isProxyIssuedAuthorization(authHeader) {
+  if (!authHeader) return false;
+  const match = String(authHeader).match(/^Bearer\s+(.+)$/i);
+  if (!match) return false;
+
+  try {
+    jwt.verify(match[1], PROXY_JWT_SECRET);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function addForwardedAuthorization(forwardHeaders, authHeader) {
+  if (!authHeader) return;
+
+  if (isProxyIssuedAuthorization(authHeader)) {
+    console.log('   Skipping proxy-issued auth token for upstream request');
+    return;
+  }
+
+  forwardHeaders['Authorization'] = authHeader;
+}
 
 // ============================================
 // UTILITY FUNCTIONS
@@ -86,6 +111,18 @@ function convertDateFormat(dateStr) {
   }
   
   return dateStr;
+}
+
+function normalizePhoneNumber(phoneNumber) {
+  const rawValue = String(phoneNumber || '').trim();
+  if (!rawValue) return '';
+
+  const digits = rawValue.replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('254')) return digits;
+  if (digits.startsWith('0') && digits.length === 10) return `254${digits.slice(1)}`;
+  if (digits.length === 9) return `254${digits}`;
+  return digits;
 }
 
 function normalizeProtocol(protocols) {
@@ -203,6 +240,7 @@ Metro Sacco`,
     `,
   });
 }
+
 // ============================================
 // LOAN APPLICATION EMAIL NOTIFICATIONS
 // ============================================
@@ -250,7 +288,7 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
       await transport.sendMail({
         from: sender,
         to: applicantEmail,
-        subject: `Metro Sacco � Instant Loan Application Received (${loanNo})`,
+        subject: `Metro Sacco – Instant Loan Application Received (${loanNo})`,
         text: [
           `Dear ${applicantName},`,
           ``,
@@ -310,7 +348,7 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
       });
       console.log(`   ??  Applicant confirmation sent to ${applicantEmail}`);
     } else {
-      console.warn(`   ??  No email address found for member ${memberNo} � skipping applicant email`);
+      console.warn(`   ??  No email address found for member ${memberNo} – skipping applicant email`);
     }
 
     // -- Admin notification email ------------------------------------------
@@ -318,7 +356,7 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
     await transport.sendMail({
       from: sender,
       to: ADMIN_EMAILS.join(', '),
-      subject: `[ACTION REQUIRED] New Instant Loan Application � ${memberNo} (${loanNo})`,
+      subject: `[ACTION REQUIRED] New Instant Loan Application – ${memberNo} (${loanNo})`,
       text: [
         `Dear Sacco Administrator,`,
         ``,
@@ -346,7 +384,7 @@ async function sendLoanApplicationEmails({ memberNo, memberName, loanNo, amount,
         <div style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.6;max-width:600px;margin:0 auto">
           <div style="background:#b91c1c;padding:24px 32px;border-radius:8px 8px 0 0">
             <h2 style="color:#ffffff;margin:0;font-size:18px">Metropolitan Hospital Sacco Ltd</h2>
-            <p style="color:#fecaca;margin:4px 0 0;font-size:13px">?? Action Required � New Loan Application</p>
+            <p style="color:#fecaca;margin:4px 0 0;font-size:13px">?? Action Required – New Loan Application</p>
           </div>
           <div style="background:#ffffff;padding:28px 32px;border:1px solid #e5e7eb;border-top:none">
             <p>Dear Sacco Administrator,</p>
@@ -419,6 +457,7 @@ app.use('/api/v1', async (req, res, next) => {
   // Check if this is a locally-handled endpoint (PDF etc.)
   const isLocalEndpoint =
     LOCAL_ENDPOINTS.some(endpoint => req.path === endpoint) ||
+    /^\/member\/[^/]+$/.test(req.path) ||
     LOCAL_ENDPOINT_PREFIXES.some(prefix => req.path.startsWith(prefix));
 
   if (isLocalEndpoint) {
@@ -479,9 +518,7 @@ app.use('/api/v1', async (req, res, next) => {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
       };
-      if (req.headers.authorization) {
-        forwardHeaders['Authorization'] = req.headers.authorization;
-      }
+      addForwardedAuthorization(forwardHeaders, req.headers.authorization);
 
       // Spring Boot expects PUT for changePassword
       const springMethod = req.path === '/auth/change-password' ? 'PUT' : req.method;
@@ -535,9 +572,7 @@ app.use('/api/v1', async (req, res, next) => {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
     };
-    if (req.headers.authorization) {
-      forwardHeaders['Authorization'] = req.headers.authorization;
-    }
+    addForwardedAuthorization(forwardHeaders, req.headers.authorization);
     if (req.headers.cookie) {
       forwardHeaders['Cookie'] = req.headers.cookie;
     }
@@ -591,22 +626,26 @@ function phoneMatches(inputPhone, registeredPhone) {
   return input === registered || input.endsWith(registered.slice(-9)) || registered.endsWith(input.slice(-9));
 }
 
-async function getLatestUnusedOtp(memberNo) {
+function getOtpLoggedInFlag(purpose) {
+  return String(purpose || '').trim().toLowerCase() === 'create-account' ? false : true;
+}
+
+async function getLatestUnusedOtp(memberNo, loggedInFlag = true) {
   const result = await dbPool.query(
     `SELECT id, pass_key, email, cdate
      FROM pb_sacco_passkey
      WHERE member_no = $1
        AND COALESCE(key_used, false) = false
-       AND COALESCE(logged_in, loged_in, true) = true
+       AND COALESCE(logged_in, loged_in, true) = $2
      ORDER BY cdate DESC NULLS LAST, id DESC
      LIMIT 1`,
-    [memberNo]
+    [memberNo, loggedInFlag]
   );
 
   return result.rows[0] || null;
 }
 
-async function verifyLatestOtp({ memberNo, otp, email }) {
+async function verifyLatestOtp({ memberNo, otp, email, loggedInFlag = true }) {
   const normalizedOtp = Number(String(otp || '').trim());
   if (!Number.isFinite(normalizedOtp)) {
     return { ok: false, status: 400, message: 'Invalid OTP. Please check the code sent to your email.' };
@@ -618,11 +657,11 @@ async function verifyLatestOtp({ memberNo, otp, email }) {
      WHERE member_no = $1
        AND pass_key = $2
        AND COALESCE(key_used, false) = false
-       AND COALESCE(logged_in, loged_in, true) = true
+       AND COALESCE(logged_in, loged_in, true) = $3
        AND cdate >= NOW() - INTERVAL '30 minutes'
      ORDER BY cdate DESC NULLS LAST, id DESC
      LIMIT 1`,
-    [memberNo, normalizedOtp]
+    [memberNo, normalizedOtp, loggedInFlag]
   );
 
   const otpRecord = result.rows[0];
@@ -660,6 +699,34 @@ app.post('/api/v1/auth/authenticate', async (req, res) => {
   }
 
   try {
+    try {
+      const springResponse = await axios({
+        method: 'POST',
+        url: `${SPRING_API_BASE}/auth/authenticate`,
+        data: { memberNo, password },
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        timeout: 30000,
+      });
+
+      console.log(`   Spring authentication succeeded for ${memberNo}`);
+      return res.status(springResponse.status).json(springResponse.data);
+    } catch (springError) {
+      const status = springError.response?.status;
+      const body = springError.response?.data;
+      const springMessage = typeof body === 'string'
+        ? body
+        : body?.message || body?.error || springError.message || '';
+
+      if (status && status < 500 && !/unique result/i.test(springMessage)) {
+        return res.status(status).json(body || { message: springMessage || 'Invalid member number or password.' });
+      }
+
+      console.warn(`   Spring authentication failed for ${memberNo}; using local duplicate-safe fallback: ${springMessage}`);
+    }
+
     const userResult = await dbPool.query(
       `SELECT id, member_no, email, mobile_no, password, COALESCE(role, 'USER') AS role, input_date
        FROM pb_users
@@ -707,8 +774,9 @@ app.post('/api/v1/auth/authenticate', async (req, res) => {
         memberNo: matchedUser.member_no,
         role,
         userId: matchedUser.id,
+        proxyIssued: true,
       },
-      process.env.JWT_SECRET || 'metro-sacco-portal-secret',
+      PROXY_JWT_SECRET,
       { expiresIn: '12h' }
     );
 
@@ -726,6 +794,93 @@ app.post('/api/v1/auth/authenticate', async (req, res) => {
   } catch (error) {
     console.error('? Local authentication failed:', error.message);
     return res.status(500).json({ message: 'Unable to sign in right now. Please try again later.' });
+  }
+});
+
+// ============================================
+// LOCAL ENDPOINT: MEMBER PROFILE
+// ============================================
+app.get('/api/v1/member/:memberNo', async (req, res) => {
+  const memberNo = normalizeAuthMemberNo(req.params.memberNo);
+  console.log(`\n?? [LOCAL] Fetching member profile for: ${memberNo}`);
+
+  if (!memberNo) {
+    return res.status(400).json({ message: 'Member number is required.' });
+  }
+
+  try {
+    const memberResult = await dbPool.query(
+      `SELECT acc_no,
+              holders_name,
+              short_name,
+              share_hold_status,
+              nationality,
+              resident,
+              id_no,
+              tel1,
+              tel2,
+              payroll_no,
+              email_add,
+              mem_category,
+              postal_address,
+              postal_code,
+              street,
+              avenue,
+              locality,
+              building_name,
+              floor_no,
+              gender,
+              legal_stat,
+              dob,
+              bank_acc,
+              bank_name,
+              mode_ofpymt,
+              date,
+              nok1,
+              nok1_pnoneno,
+              relation1,
+              nok2,
+              nok2_pnoneno,
+              relation2,
+              nok3,
+              nok3_pnoneno,
+              relation3,
+              loan_blacklisted,
+              id
+       FROM pb_share_register
+       WHERE upper(trim(acc_no)) = $1
+       ORDER BY id DESC NULLS LAST
+       LIMIT 1`,
+      [memberNo]
+    );
+
+    if (memberResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Member record not found.' });
+    }
+
+    const member = memberResult.rows[0];
+    return res.json({
+      ...member,
+      accNo: member.acc_no,
+      memberNo: member.acc_no,
+      holdersName: member.holders_name,
+      name: member.holders_name,
+      idNo: member.id_no,
+      idNumber: member.id_no,
+      tel1: member.tel1,
+      phone: member.tel1,
+      emailAdd: member.email_add,
+      email: member.email_add,
+      postalAddress: member.postal_address,
+      postalCode: member.postal_code,
+      memberCategory: member.mem_category,
+      joinDate: member.date,
+      createdAt: member.date,
+      kraPin: null,
+    });
+  } catch (error) {
+    console.error('Failed to fetch local member profile:', error.message);
+    return res.status(500).json({ message: 'Unable to fetch member profile right now.' });
   }
 });
 // ============================================
@@ -814,7 +969,12 @@ app.post('/api/v1/auth/register', async (req, res) => {
       return res.status(400).json({ message: 'The mobile number does not match this member account.' });
     }
 
-    const otpCheck = await verifyLatestOtp({ memberNo, otp, email });
+    const otpCheck = await verifyLatestOtp({
+      memberNo,
+      otp,
+      email,
+      loggedInFlag: false,
+    });
     if (!otpCheck.ok) {
       return res.status(otpCheck.status).json({ message: otpCheck.message });
     }
@@ -876,7 +1036,8 @@ app.post('/api/v1/auth/registerOtp', async (req, res) => {
   const memberNo = String(req.body?.memberNo || '').trim();
   const requestedEmail = String(req.body?.email || '').trim();
   const requestedMobile = String(req.body?.mobileNo || req.body?.phoneNo || '').trim();
-  console.log(`\n📧 [LOCAL] Sending OTP for: ${memberNo}`);
+  const loggedInFlag = getOtpLoggedInFlag(req.body?.purpose);
+  console.log(`\nðŸ“§ [LOCAL] Sending OTP for: ${memberNo}`);
 
   if (!memberNo) {
     return res.status(400).json({ message: 'Member number is required.' });
@@ -920,6 +1081,7 @@ app.post('/api/v1/auth/registerOtp', async (req, res) => {
     }
 
     const member = memberResult.rows[0];
+    const smsPhoneNumber = normalizePhoneNumber(requestedMobile || member.tel1);
     if (!member.email) {
       return res.status(400).json({ message: 'No email address is registered for this member account.' });
     }
@@ -929,12 +1091,12 @@ app.post('/api/v1/auth/registerOtp', async (req, res) => {
        FROM pb_sacco_passkey
        WHERE member_no = $1
          AND lower(coalesce(email, '')) = lower($2)
-         AND COALESCE(logged_in, loged_in, true) = true
+         AND COALESCE(logged_in, loged_in, true) = $3
          AND COALESCE(key_used, false) = false
          AND cdate >= NOW() - INTERVAL '10 minutes'
        ORDER BY cdate DESC NULLS LAST, id DESC
        LIMIT 1`,
-      [memberNo, member.email]
+      [memberNo, member.email, loggedInFlag]
     );
 
     let otpRecord = existingOtpResult.rows[0];
@@ -945,20 +1107,28 @@ app.post('/api/v1/auth/registerOtp', async (req, res) => {
         `UPDATE pb_sacco_passkey
          SET key_used = true
          WHERE member_no = $1
-           AND logged_in = true
+           AND COALESCE(logged_in, loged_in, true) = $2
            AND key_used = false`,
-        [memberNo]
+        [memberNo, loggedInFlag]
       );
 
       const insertResult = await dbPool.query(
         `INSERT INTO pb_sacco_passkey (member_no, phone_no, email, logged_in, sms_sent, key_used)
-         VALUES ($1, $2, $3, true, false, false)
+         VALUES ($1, $2, $3, $4, false, false)
          RETURNING id, pass_key, cdate`,
-        [memberNo, member.tel1 || null, member.email]
+        [memberNo, smsPhoneNumber || member.tel1 || null, member.email, loggedInFlag]
       );
 
       otpRecord = insertResult.rows[0];
     } else {
+      await dbPool.query(
+        `UPDATE pb_sacco_passkey
+         SET phone_no = COALESCE($2, phone_no),
+             sms_sent = false,
+             key_used = false
+         WHERE id = $1`,
+        [otpRecord.id, smsPhoneNumber || null]
+      );
       console.log(`   Re-sending existing active OTP ${otpRecord.id} for ${memberNo}`);
     }
 
@@ -974,20 +1144,27 @@ app.post('/api/v1/auth/registerOtp', async (req, res) => {
       if (!reusedExistingOtp) {
         await dbPool.query(`UPDATE pb_sacco_passkey SET key_used = true WHERE id = $1`, [otpRecord.id]);
       }
-      console.error('❌ Failed to send OTP email:', emailError.message);
+      console.error('âŒ Failed to send OTP email:', emailError.message);
       return res.status(500).json({
         message: 'Failed to send OTP email. Please try again.',
       });
     }
 
+    const smsEnabled = Boolean(smsPhoneNumber);
+    const deliveryMessage = smsEnabled
+      ? `OTP sent successfully. Please check your email or phone number for the code.`
+      : `OTP sent successfully. Please check your email for the code.`;
+
     return res.status(201).json({
       memberNo,
       email: member.email,
-      message: `OTP sent successfully to ${member.email}. Please check your email.`,
+      phoneNo: smsEnabled ? smsPhoneNumber : null,
+      smsQueued: smsEnabled,
+      message: deliveryMessage,
       sentAt: otpRecord.cdate,
     });
   } catch (error) {
-    console.error('❌ OTP email flow failed:', error.message);
+    console.error('âŒ OTP email flow failed:', error.message);
     return res.status(500).json({
       message: 'Unable to send OTP right now. Please try again later.',
     });
@@ -1023,7 +1200,7 @@ app.post('/api/v1/loan/apply', async (req, res) => {
       ? 'N/A'
       : rawPayMode.charAt(0).toUpperCase() + rawPayMode.slice(1).toLowerCase();
 
-  console.log(`\n📝 [LOCAL] Registering instant loan in pb_saccoloan for: ${normalizedMemberNo}`);
+  console.log(`\nðŸ“ [LOCAL] Registering instant loan in pb_saccoloan for: ${normalizedMemberNo}`);
 
   if (!normalizedMemberNo) {
     return res.status(400).json({ message: 'Member number is required.' });
@@ -1031,6 +1208,10 @@ app.post('/api/v1/loan/apply', async (req, res) => {
 
   if (!amount || amount <= 0 || !period || period <= 0) {
     return res.status(400).json({ message: 'Valid loan amount and period are required.' });
+  }
+
+  if (amount < 1000) {
+    return res.status(400).json({ message: 'The minimum instant loan amount is KES 1,000.' });
   }
 
   const client = await dbPool.connect();
@@ -1045,7 +1226,9 @@ app.post('/api/v1/loan/apply', async (req, res) => {
               email_add,
               tel1,
               postal_address,
-              postal_code
+              postal_code,
+              date AS member_since,
+              COALESCE(loan_blacklisted, false) AS loan_blacklisted
        FROM pb_share_register
        WHERE acc_no = $1`,
       [normalizedMemberNo]
@@ -1057,6 +1240,111 @@ app.post('/api/v1/loan/apply', async (req, res) => {
     }
 
     const member = memberResult.rows[0];
+    const formatKES = (value) => Number(value || 0).toLocaleString('en-KE', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
+    const instantLoanCap = 50000;
+    const minimumShareCapital = 10000;
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+    if (amount > instantLoanCap) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        message: `Instant loans are currently capped at KES ${formatKES(instantLoanCap)}. For higher loan amounts, please contact the Sacco office for guidance on other loan products.`,
+        code: 'INSTANT_LOAN_CAP_EXCEEDED',
+      });
+    }
+
+    if (period > 6) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        message: 'Instant loans can only be repaid over a maximum of 6 months.',
+        code: 'INSTANT_LOAN_PERIOD_EXCEEDED',
+      });
+    }
+
+    if (member.loan_blacklisted) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        message: 'Your account is currently not eligible for instant loans. Please contact the Sacco office for assistance.',
+        code: 'LOAN_BLACKLISTED',
+      });
+    }
+
+    if (!member.member_since || new Date(member.member_since) > sixMonthsAgo) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        message: 'Instant loans are available to members who have been active for at least 6 months. Please contact the Sacco office if you need help.',
+        code: 'MEMBERSHIP_TOO_NEW',
+      });
+    }
+
+    const eligibilityResult = await client.query(
+      `SELECT
+         COALESCE((SELECT SUM(COALESCE(credit, 0) - COALESCE(debit, 0))
+                   FROM ac_shares_ledger
+                   WHERE account_no = $1), 0) AS savings_balance,
+         COALESCE((SELECT SUM(COALESCE(credit, 0) - COALESCE(debit, 0))
+                   FROM ac_shares_capital
+                   WHERE account_no = $1), 0) AS share_capital,
+         COALESCE((SELECT MAX(outstanding)
+                   FROM (
+                     SELECT SUM(COALESCE(d.balance, 0) - COALESCE(d.credit_bal, 0)) AS outstanding
+                     FROM ac_debtors d
+                     JOIN pb_saccoloan l ON l.mem_no = d.account_no AND l.loan_no = d.invoice_no
+                     WHERE d.account_no = $1
+                       AND upper(coalesce(l.lpurpose, d.item, '')) LIKE '%INSTANT LOAN%'
+                     GROUP BY d.invoice_no
+                     HAVING SUM(COALESCE(d.balance, 0) - COALESCE(d.credit_bal, 0)) > 0
+                   ) unpaid_instant_loans), 0) AS active_instant_balance`,
+      [normalizedMemberNo]
+    );
+
+    const eligibility = eligibilityResult.rows[0] || {};
+    const savingsBalance = Number(eligibility.savings_balance || 0);
+    const shareCapital = Number(eligibility.share_capital || 0);
+    const activeInstantBalance = Number(eligibility.active_instant_balance || 0);
+    const savingsBasedLimit = savingsBalance * 3;
+
+    if (shareCapital < minimumShareCapital) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        message: `Instant loan applications require minimum share capital of KES ${formatKES(minimumShareCapital)}. Your current share capital is KES ${formatKES(shareCapital)}.`,
+        code: 'INSUFFICIENT_SHARE_CAPITAL',
+        eligibility: { shareCapital, requiredShareCapital: minimumShareCapital },
+      });
+    }
+
+    if (activeInstantBalance > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        message: `You already have an unpaid instant loan balance of KES ${formatKES(activeInstantBalance)}. Please clear it before applying for another instant loan.`,
+        code: 'EXISTING_INSTANT_LOAN_BALANCE',
+        eligibility: { activeInstantBalance },
+      });
+    }
+
+    if (savingsBalance < amount) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        message: `Your savings balance is KES ${formatKES(savingsBalance)}. To apply for this instant loan, your savings should be at least KES ${formatKES(amount)}.`,
+        code: 'INSUFFICIENT_SAVINGS',
+        eligibility: { savingsBalance, requestedAmount: amount },
+      });
+    }
+
+    if (amount > savingsBasedLimit) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        message: `Based on your savings of KES ${formatKES(savingsBalance)}, your maximum eligible loan is KES ${formatKES(savingsBasedLimit)}. For higher amounts, please contact the Sacco office.`,
+        code: 'SAVINGS_MULTIPLE_EXCEEDED',
+        eligibility: { savingsBalance, savingsBasedLimit, requestedAmount: amount },
+      });
+    }
+
     const existingPendingResult = await client.query(
       `SELECT loan_no
        FROM pb_saccoloan
@@ -1165,7 +1453,7 @@ app.post('/api/v1/loan/apply', async (req, res) => {
     });
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
-    console.error('❌ Failed to register instant loan locally:', error.message);
+    console.error('âŒ Failed to register instant loan locally:', error.message);
     return res.status(500).json({
       message: 'We could not register the loan application right now.',
       error: error.message,
@@ -1180,7 +1468,7 @@ app.post('/api/v1/loan/apply', async (req, res) => {
 // ============================================
 app.get('/api/v1/instant/:memberNo', async (req, res) => {
   const { memberNo } = req.params;
-  console.log(`\n📘 [LOCAL] Fetching active instant loans for: ${memberNo}`);
+  console.log(`\nðŸ“˜ [LOCAL] Fetching active instant loans for: ${memberNo}`);
 
   try {
     const activeLoanResult = await dbPool.query(
@@ -1216,7 +1504,7 @@ app.get('/api/v1/instant/:memberNo', async (req, res) => {
       data: activeLoanResult.rows,
     });
   } catch (error) {
-    console.error('❌ Failed to fetch active instant loans:', error.message);
+    console.error('âŒ Failed to fetch active instant loans:', error.message);
     return res.status(500).json({
       error: 'Failed to fetch active instant loans',
       message: error.message,
@@ -1229,7 +1517,7 @@ app.get('/api/v1/instant/:memberNo', async (req, res) => {
 // ============================================
 app.get('/api/v1/loan-applications/:memberNo', async (req, res) => {
   const { memberNo } = req.params;
-  console.log(`\n📋 [LOCAL] Fetching pending loan applications for: ${memberNo}`);
+  console.log(`\nðŸ“‹ [LOCAL] Fetching pending loan applications for: ${memberNo}`);
 
   try {
     const pendingResult = await dbPool.query(
@@ -1258,7 +1546,7 @@ app.get('/api/v1/loan-applications/:memberNo', async (req, res) => {
       data: pendingResult.rows,
     });
   } catch (error) {
-    console.error('❌ Failed to fetch pending loan applications:', error.message);
+    console.error('âŒ Failed to fetch pending loan applications:', error.message);
     return res.status(500).json({
       error: 'Failed to fetch pending loan applications',
       message: error.message,
@@ -1284,7 +1572,7 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
     payMode: requestedPayMode,
     interestRate: requestedInterestRate,
   } = req.body;
-  console.log(`\n📄 [LOCAL] Generating PDF for Loan: ${loanNo}`);
+  console.log(`\nðŸ“„ [LOCAL] Generating PDF for Loan: ${loanNo}`);
   
   try {
     const headerResult = await dbPool.query("SELECT header_name FROM pb_header LIMIT 1");
@@ -1612,7 +1900,7 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
     doc.end();
     
   } catch (error) {
-    console.error('   ❌ Error:', error.message);
+    console.error('   âŒ Error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1622,7 +1910,7 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
 // ============================================
 app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
   const { accountNo, startDate, endDate } = req.body;
-  console.log(`\n📄 [LOCAL] Generating Withdrawable Statement for: ${accountNo}`);
+  console.log(`\nðŸ“„ [LOCAL] Generating Withdrawable Statement for: ${accountNo}`);
   
   try {
     const headerResult = await dbPool.query("SELECT header_name FROM pb_header LIMIT 1");
@@ -1876,7 +2164,7 @@ app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
     doc.end();
     
   } catch (error) {
-    console.error('   ❌ Error:', error.message);
+    console.error('   âŒ Error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1886,22 +2174,34 @@ app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
 // ============================================
 app.listen(port, '0.0.0.0', () => {
   console.log(`\n${'='.repeat(60)}`);
-  console.log(`🚀 PROXY SERVER RUNNING on port ${port}`);
+  console.log(`ðŸš€ PROXY SERVER RUNNING on port ${port}`);
   console.log(`${'='.repeat(60)}`);
-  console.log(`📍 URL: http://localhost:${port}`);
-  console.log(`\n🌱 Spring Boot backend: ${SPRING_API_BASE}`);
-  console.log(`🔄 Live remote server:  ${LIVE_API_BASE}`);
-  console.log(`\n✅ SPRING BOOT ENDPOINTS (→ localhost:8080):`);
-  console.log(`\n📄 LOCAL ENDPOINTS (handled here):`);
+  console.log(`ðŸ“ URL: http://localhost:${port}`);
+  console.log(`\nðŸŒ± Spring Boot backend: ${SPRING_API_BASE}`);
+  console.log(`ðŸ”„ Live remote server:  ${LIVE_API_BASE}`);
+  console.log(`\nâœ… SPRING BOOT ENDPOINTS (â†’ localhost:8080):`);
+  console.log(`\nðŸ“„ LOCAL ENDPOINTS (handled here):`);
   console.log(`   POST   /api/v1/auth/authenticate`);
   console.log(`   POST   /api/v1/auth/registerOtp`);
   console.log(`   POST   /api/v1/auth/change-password`);
   console.log(`   POST   /api/v1/auth/register`);
   console.log(`   POST   /api/v1/loan-statement-direct`);
   console.log(`   POST   /api/v1/withdrawable-statement-direct`);
-  console.log(`\n🧪 TEST ENDPOINT: http://localhost:${port}/api/v1/test`);
+  console.log(`\nðŸ§ª TEST ENDPOINT: http://localhost:${port}/api/v1/test`);
   console.log(`${'='.repeat(60)}\n`);
 });
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

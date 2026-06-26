@@ -142,7 +142,7 @@ function ApplyLoan() {
     }
 
     if (amount > MAX_AMOUNT) {
-      setSubmitMessage(`The maximum instant loan amount is KES ${MAX_AMOUNT.toLocaleString()}.`);
+      setSubmitMessage(`Instant loans are capped at KES ${MAX_AMOUNT.toLocaleString()}. For higher loan amounts, please contact the Sacco office for guidance.`);
       setSubmitMessageType('error');
       return false;
     }
@@ -394,7 +394,7 @@ function ApplyLoan() {
             <div className="loan-info">
               <div className="info-icon">i</div>
               <div className="info-text">
-                <strong>Instant Loan Features:</strong> Minimum KES 1,000 | Maximum KES 50,000 | Maximum repayment period 6 months | Interest rate 4.5% per month
+                <strong>Instant Loan Terms:</strong> Minimum KES 1,000 | Maximum KES 50,000 | Maximum repayment period 6 months | Interest rate 4.5% per month | For higher amounts, please contact the Sacco office
               </div>
             </div>
 

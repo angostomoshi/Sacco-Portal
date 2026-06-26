@@ -66,7 +66,7 @@ const CreateAccount = () => {
       }
 
       setShowOtpField(true);
-      setSuccess(data.message || `OTP sent successfully to ${formData.email.trim()}. Please check your email.`);
+      setSuccess(data.message || 'OTP sent successfully. Please check your email or phone number for the code.');
       
       setTimeout(() => setSuccess(''), 3000);
     } catch (err) {

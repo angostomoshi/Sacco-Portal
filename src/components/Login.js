@@ -25,6 +25,7 @@ const Login = ({ onLogin, onCreateAccount, onForgotPassword }) => {
     }
     
     setLoading(true);
+    localStorage.removeItem('authToken');
     
     try {
       // Call through proxy server (NOT directly to live server)
