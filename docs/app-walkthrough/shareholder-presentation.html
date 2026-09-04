@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Metropolitan Hospital Sacco Member Portal Walkthrough</title>
+  <style>
+    :root {
+      --brand: #00a3b5;
+      --ink: #102033;
+      --muted: #66758a;
+      --line: #d8e3ea;
+      --soft: #eef7f9;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: #f4f8fb;
+      font-family: Arial, Helvetica, sans-serif;
+      line-height: 1.5;
+    }
+
+    .deck {
+      width: min(1180px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 28px 0 64px;
+    }
+
+    .cover,
+    .slide {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      margin: 0 0 28px;
+      overflow: hidden;
+      box-shadow: 0 12px 32px rgba(16, 32, 51, 0.08);
+      break-after: page;
+    }
+
+    .cover {
+      padding: 64px;
+      min-height: 540px;
+      display: grid;
+      align-content: center;
+      background:
+        linear-gradient(120deg, rgba(0, 163, 181, 0.12), rgba(255, 255, 255, 0.8)),
+        #fff;
+    }
+
+    .eyebrow {
+      color: var(--brand);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin: 0 0 16px;
+    }
+
+    h1 {
+      font-size: 48px;
+      line-height: 1.06;
+      max-width: 760px;
+      margin: 0 0 22px;
+    }
+
+    h2 {
+      font-size: 24px;
+      margin: 0;
+    }
+
+    p {
+      color: var(--muted);
+      font-size: 16px;
+      margin: 10px 0 0;
+      max-width: 850px;
+    }
+
+    .note {
+      border-left: 4px solid var(--brand);
+      color: #26445a;
+      margin-top: 34px;
+      padding: 12px 18px;
+      background: rgba(0, 163, 181, 0.08);
+      max-width: 760px;
+    }
+
+    .slide-header {
+      padding: 24px 28px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .slide-media {
+      background: var(--soft);
+      padding: 18px;
+    }
+
+    .slide-media img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      padding: 28px;
+    }
+
+    .summary div {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      background: #fff;
+    }
+
+    .summary strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--ink);
+    }
+
+    @media print {
+      body { background: #fff; }
+      .deck { width: 100%; padding: 0; }
+      .cover, .slide { box-shadow: none; border-radius: 0; margin: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="deck">
+    <section class="cover">
+      <p class="eyebrow">Shareholder Walkthrough</p>
+      <h1>Metropolitan Hospital Sacco Member Portal</h1>
+      <p>A visual walkthrough of the web app: member login, dashboard, profile, M-Pesa payments, statements, loans, dividends, guarantors, and account self-service.</p>
+      <p class="note">Captured using member MS041 for demonstration. No payment, loan application, account creation, password change, or PDF download was submitted.</p>
+    </section>
+
+    <section class="slide">
+      <div class="slide-header">
+        <h2>Secure Member Login</h2>
+        <p>Members access the portal using their member number and password.</p>
+      </div>
+      <div class="slide-media"><img src="screenshots/01-login.png" alt="Login screen"></div>
+    </section>
+
+    <section class="slide">
+      <div class="slide-header">
+        <h2>Dashboard Overview</h2>
+        <p>The dashboard summarizes balances, member status, loan exposure, and the most important member actions.</p>
+      </div>
+      <div class="slide-media"><img src="screenshots/02-dashboard.png" alt="Dashboard overview"></div>
+    </section>
+
+    <section class="slide">
+      <div class="slide-header">
+        <h2>Member Profile</h2>
+        <p>Members can confirm personal details used for statements, payment prompts, and Sacco communication.</p>
+      </div>
+      <div class="slide-media"><img src="screenshots/03-member-profile.png" alt="Member profile"></div>
+    </section>
+
+    <section class="slide">
+      <div class="slide-header">
+        <h2>Deposit Via M-Pesa</h2>
+        <p>Members choose whether a payment is for savings, withdrawable deposits, or loan repayment before approving the phone prompt.</p>
+      </div>
+      <div class="slide-media"><img src="screenshots/04-deposit-mpesa.png" alt="Deposit via M-Pesa"></div>
+    </section>
+
+    <section class="slide">
+      <div class="slide-header">
+        <h2>Savings Statement</h2>
+        <p>The report shows recent savings transactions, including successful M-Pesa savings payments after Daraja callback confirmation.</p>
+      </div>
+      <div class="slide-media"><img src="screenshots/05-savings-statement.png" alt="Savings statement"></div>
+    </section>
+
+    <section class="slide">
+      <div class="slide-header">
+        <h2>Withdrawable Statement</h2>
+        <p>Withdrawable deposits are shown separately from member savings to protect reporting accuracy.</p>
+      </div>
+      <div class="slide-media"><img src="screenshots/06-withdrawable-statement.png" alt="Withdrawable statement"></div>
+    </section>
+
+    <section class="slide">
+      <div class="slide-header">
+        <h2>Loan Statement</h2>
+        <p>Members can view active loans, interest, monthly repayment, outstanding balance, and repayment options.</p>
+      </div>
+      <div class="slide-media"><img src="screenshots/07-loan-statement.png" alt="Loan statement"></div>
+    </section>
+
+    <section class="slide">
+      <div class="slide-header">
+        <h2>Instant Loan Application</h2>
+        <p>The portal previews repayment values before a member submits an application.</p>
+      </div>
+      <div class="slide-media"><img src="screenshots/08-apply-loan.png" alt="Instant loan application"></div>
+    </section>
+
+    <section class="slide">
+      <div class="slide-header">
+        <h2>Dividends</h2>
+        <p>Members can view dividend information and related shareholder benefits.</p>
+      </div>
+      <div class="slide-media"><img src="screenshots/09-dividends.png" alt="Dividends"></div>
+    </section>
+
+    <section class="slide">
+      <div class="slide-header">
+        <h2>Guarantors</h2>
+        <p>The guarantor view gives members visibility into loans where they appear as guarantors.</p>
+      </div>
+      <div class="slide-media"><img src="screenshots/10-guarantors.png" alt="Guarantors"></div>
+    </section>
+
+    <section class="slide">
+      <div class="slide-header">
+        <h2>Share Capital</h2>
+        <p>The share capital report shows ownership contribution separately from savings and withdrawable deposits.</p>
+      </div>
+      <div class="slide-media"><img src="screenshots/11-share-capital.png" alt="Share capital"></div>
+    </section>
+
+    <section class="slide">
+      <div class="slide-header">
+        <h2>Account Creation</h2>
+        <p>Members can create portal access where self-onboarding is enabled.</p>
+      </div>
+      <div class="slide-media"><img src="screenshots/12-create-account.png" alt="Create account"></div>
+    </section>
+
+    <section class="slide">
+      <div class="slide-header">
+        <h2>Password Change</h2>
+        <p>Members can update credentials through a self-service password flow.</p>
+      </div>
+      <div class="slide-media"><img src="screenshots/13-change-password.png" alt="Change password"></div>
+    </section>
+
+    <section class="slide">
+      <div class="slide-header">
+        <h2>Shareholder Value</h2>
+        <p>The portal improves transparency, reduces manual follow-up, and gives members direct access to balances, reports, loan information, guarantor exposure, dividends, and M-Pesa payment services.</p>
+      </div>
+      <div class="summary">
+        <div><strong>Transparency</strong>Members can view balances, reports, loans, dividends, and guarantees from one place.</div>
+        <div><strong>Operational Efficiency</strong>Digital self-service reduces routine office requests and manual statement follow-up.</div>
+        <div><strong>Payment Confidence</strong>M-Pesa payments are tied to member, loan, and deposit references for cleaner ledger posting.</div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

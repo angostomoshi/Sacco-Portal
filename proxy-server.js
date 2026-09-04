@@ -300,6 +300,58 @@ async function initiateStkPush({ phoneNo, amount, accountReference, transactionD
   return response.data;
 }
 
+function getB2CConfig() {
+  const mpesaCallbackBaseUrl = process.env.MPESA_CALLBACK_URL
+    ? process.env.MPESA_CALLBACK_URL.replace(/\/api\/v1\/mpesa\/callback\/?$/i, '')
+    : '';
+  const resultUrl = process.env.MPESA_B2C_RESULT_URL || (mpesaCallbackBaseUrl ? `${mpesaCallbackBaseUrl}/api/v1/mpesa/b2c/result` : '');
+  const timeoutUrl = process.env.MPESA_B2C_TIMEOUT_URL || (mpesaCallbackBaseUrl ? `${mpesaCallbackBaseUrl}/api/v1/mpesa/b2c/timeout` : '');
+  const initiatorName = process.env.MPESA_B2C_INITIATOR_NAME;
+  const securityCredential = process.env.MPESA_B2C_SECURITY_CREDENTIAL;
+  const shortcode = process.env.MPESA_B2C_SHORTCODE || process.env.MPESA_SHORTCODE;
+
+  return {
+    enabled: Boolean(resultUrl && timeoutUrl && initiatorName && securityCredential && shortcode),
+    shortcode,
+    initiatorName,
+    securityCredential,
+    resultUrl,
+    timeoutUrl,
+    commandId: process.env.MPESA_B2C_COMMAND_ID || 'BusinessPayment',
+  };
+}
+
+async function initiateB2CPayment({ originatorConversationId, phoneNo, amount, remarks, occasion }) {
+  const config = getB2CConfig();
+  if (!config.enabled) {
+    throw new Error('M-Pesa B2C is not fully configured.');
+  }
+
+  const accessToken = await getMpesaAccessToken();
+  const response = await axios.post(
+    `${MPESA_BASE_URL}/mpesa/b2c/v3/paymentrequest`,
+    {
+      OriginatorConversationID: originatorConversationId,
+      InitiatorName: config.initiatorName,
+      SecurityCredential: config.securityCredential,
+      CommandID: config.commandId,
+      Amount: Math.round(Number(amount)),
+      PartyA: config.shortcode,
+      PartyB: phoneNo,
+      Remarks: String(remarks || 'Emergency Advance').slice(0, 100),
+      QueueTimeOutURL: config.timeoutUrl,
+      ResultURL: config.resultUrl,
+      Occassion: String(occasion || 'Emergency Advance').slice(0, 100),
+    },
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 20000,
+    }
+  );
+
+  return response.data;
+}
+
 function normalizeProtocol(protocols) {
   return String(protocols || '').trim().toUpperCase();
 }
@@ -768,6 +820,134 @@ async function sendPaymentReceipt({ checkoutRequestId }) {
   );
 }
 
+async function generateEmergencyAdvanceReceiptPdfBuffer({
+  organisationName, memberName, memberNo, loanNo, amount, periodDays,
+  charge, totalRepayable, mpesaReceiptNo, transactionDate,
+}) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 50, size: 'A4' });
+    const chunks = [];
+    doc.on('data', (chunk) => chunks.push(chunk));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    const formatKES = (val) => Number(val || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    doc.font('Helvetica-Bold').fontSize(14).text(organisationName, { align: 'center' });
+    doc.moveDown(0.3);
+    doc.font('Helvetica-Bold').fontSize(12).fillColor('#00a3b5').text('M-PESA EMERGENCY ADVANCE RECEIPT', { align: 'center' });
+    doc.moveDown(1);
+
+    const rows = [
+      ['Member Name', memberName || 'N/A'],
+      ['Member No', memberNo],
+      ['Loan Number', loanNo],
+      ['M-Pesa Receipt No', mpesaReceiptNo || 'N/A'],
+      ['Date/Time', transactionDate ? new Date(transactionDate).toLocaleString('en-GB') : new Date().toLocaleString('en-GB')],
+      ['Amount Disbursed (KES)', formatKES(amount)],
+      ['Repayment Period', `${periodDays} day(s)`],
+      ['Advance Charge (KES)', formatKES(charge)],
+      ['Total Repayable (KES)', formatKES(totalRepayable)],
+    ];
+
+    doc.font('Helvetica').fontSize(10).fillColor('#111827');
+    rows.forEach(([label, value]) => {
+      doc.font('Helvetica-Bold').text(`${label}:`, { continued: true, width: 200 });
+      doc.font('Helvetica').text(`  ${value}`);
+      doc.moveDown(0.4);
+    });
+
+    doc.moveDown(1);
+    doc.fontSize(8).fillColor('#6b7280').text('This is a computer-generated receipt and does not require a signature.', { align: 'center' });
+    doc.end();
+  });
+}
+
+async function sendEmergencyAdvanceReceipt({ b2cTransactionId }) {
+  const txnResult = await dbPool.query(
+    `SELECT id, loan_no, member_no, phone_no, amount, period_days, charge, total_repayable,
+            transaction_id, ledger_posted_at, receipt_emailed
+     FROM pb_mpesa_b2c_transactions
+     WHERE id = $1 AND status = 'success'`,
+    [b2cTransactionId]
+  );
+  const txn = txnResult.rows[0];
+  if (!txn || txn.receipt_emailed) return;
+
+  const memberResult = await dbPool.query(
+    `SELECT holders_name, email_add FROM pb_share_register WHERE acc_no = $1`,
+    [txn.member_no]
+  );
+  const member = memberResult.rows[0] || {};
+  if (!member.email_add) {
+    console.warn(`No email address found for ${txn.member_no}; skipping Emergency Advance receipt email.`);
+    return;
+  }
+
+  const headerResult = await dbPool.query('SELECT header_name FROM pb_header LIMIT 1');
+  const organisationName = headerResult.rows[0]?.header_name || 'METROPOLITAN HOSPITAL SACCO LTD';
+  const formatKES = (val) => Number(val || 0).toLocaleString('en-KE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const pdfBuffer = await generateEmergencyAdvanceReceiptPdfBuffer({
+    organisationName,
+    memberName: member.holders_name,
+    memberNo: txn.member_no,
+    loanNo: txn.loan_no,
+    amount: txn.amount,
+    periodDays: txn.period_days,
+    charge: txn.charge,
+    totalRepayable: txn.total_repayable,
+    mpesaReceiptNo: txn.transaction_id,
+    transactionDate: txn.ledger_posted_at,
+  });
+
+  await sendWithSmtpFallback({
+    to: member.email_add,
+    subject: `Metro Sacco - Emergency Advance Disbursed (${txn.transaction_id || txn.loan_no})`,
+    text: [
+      `Dear ${member.holders_name || 'Member'},`,
+      ``,
+      `Your Emergency Advance has been disbursed to your registered M-Pesa number.`,
+      ``,
+      `Loan Number       : ${txn.loan_no}`,
+      `Member No         : ${txn.member_no}`,
+      `M-Pesa Receipt No : ${txn.transaction_id || 'N/A'}`,
+      `Amount Disbursed  : KES ${formatKES(txn.amount)}`,
+      `Period            : ${txn.period_days} day(s)`,
+      `Advance Charge    : KES ${formatKES(txn.charge)}`,
+      `Total Repayable   : KES ${formatKES(txn.total_repayable)}`,
+      ``,
+      `A copy of your receipt is attached.`,
+      ``,
+      `Metro Sacco`,
+    ].join('\n'),
+    html: `
+      <div style="font-family: Arial, sans-serif; color: #1f2937; line-height: 1.5;">
+        <p>Dear ${member.holders_name || 'Member'},</p>
+        <p>Your <strong>Emergency Advance</strong> has been disbursed to your registered M-Pesa number.</p>
+        <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px">
+          <tbody>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;color:#6b7280">Loan Number</td><td style="padding:8px;border:1px solid #e5e7eb;font-weight:600">${txn.loan_no}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;color:#6b7280">M-Pesa Receipt No</td><td style="padding:8px;border:1px solid #e5e7eb;font-weight:600">${txn.transaction_id || 'N/A'}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;color:#6b7280">Amount Disbursed</td><td style="padding:8px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(txn.amount)}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;color:#6b7280">Period</td><td style="padding:8px;border:1px solid #e5e7eb;font-weight:600">${txn.period_days} day(s)</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;color:#6b7280">Advance Charge</td><td style="padding:8px;border:1px solid #e5e7eb;font-weight:600">KES ${formatKES(txn.charge)}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #e5e7eb;color:#6b7280">Total Repayable</td><td style="padding:8px;border:1px solid #e5e7eb;font-weight:700">KES ${formatKES(txn.total_repayable)}</td></tr>
+          </tbody>
+        </table>
+        <p>A copy of your receipt is attached to this email.</p>
+        <p>Metro Sacco</p>
+      </div>
+    `,
+    attachments: [{ filename: `emergency-advance-${txn.transaction_id || txn.loan_no}.pdf`, content: pdfBuffer }],
+  });
+
+  await dbPool.query(
+    `UPDATE pb_mpesa_b2c_transactions SET receipt_emailed = true, updated_at = now() WHERE id = $1`,
+    [txn.id]
+  );
+}
+
 // ============================================
 // DEBUG: Clear all OTPs for a member
 // ============================================
@@ -780,6 +960,11 @@ const LOCAL_ENDPOINTS = [
   '/auth/authenticate',
   '/loan/apply',
   '/loan/dry-run',
+  '/emergency-advance/quote',
+  '/emergency-advance/apply',
+  '/mpesa/b2c/status',
+  '/mpesa/b2c/result',
+  '/mpesa/b2c/timeout',
   '/loan-statement-direct',
   '/withdrawable-statement-direct',
   '/mpesa/stkpush',
@@ -790,6 +975,7 @@ const LOCAL_ENDPOINT_PREFIXES = [
   '/instant/',
   '/loan-applications/',
   '/mpesa/status/',
+  '/mpesa/b2c/status/',
   '/savings/',
 ];
 
@@ -2202,6 +2388,704 @@ app.post('/api/v1/loan/apply', async (req, res) => {
 });
 
 // ============================================
+// LOCAL ENDPOINT: EMERGENCY ADVANCE (B2C)
+// ============================================
+const EMERGENCY_ADVANCE_PURPOSE = 'METRO SACCO EMERGENCY ADVANCE';
+const EMERGENCY_ADVANCE_MAX_AMOUNT = 5000;
+const EMERGENCY_ADVANCE_LIMIT_SAVINGS_RATE = 10;
+const EMERGENCY_ADVANCE_ALLOWED_DAYS = [7, 14, 21];
+const EMERGENCY_ADVANCE_MONTHLY_RATE = 10;
+const EMERGENCY_ADVANCE_ACCOUNTING_USER = 'b2c_user';
+const EMERGENCY_ADVANCE_DEBTOR_CODE = '20-23-131';
+const EMERGENCY_ADVANCE_INTEREST_CODE = '80-00-006';
+const MPESA_B2C_GL_CODE = '20-25-011';
+
+function calculateEmergencyAdvance(amount, periodDays) {
+  const principal = Math.round(Number(amount || 0));
+  const days = Number(periodDays || EMERGENCY_ADVANCE_ALLOWED_DAYS[0]);
+  const charge = Math.round(principal * (days / 30) * (EMERGENCY_ADVANCE_MONTHLY_RATE / 100));
+  const total = principal + charge;
+  return { principal, charge, total, periodDays: days };
+}
+
+function getEmergencyAdvanceMemberGroup(member) {
+  if (/locum/i.test(String(member?.mem_category || ''))) return 'METROPOLITAN LOCUM STAFF';
+  if (/external/i.test(String(member?.mem_category || ''))) return 'EXTERNAL MEMBERS';
+  return 'METROPOLITAN STAFF';
+}
+
+async function getNextAccountingReference(client, prefix, sources) {
+  const normalizedPrefix = String(prefix || '').toUpperCase().replace(/[^A-Z]/g, '');
+  if (!normalizedPrefix) throw new Error('Invalid accounting reference prefix.');
+
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`accounting-ref-${normalizedPrefix}`]);
+
+  const unionSql = sources.map(({ table, column }) => (
+    `SELECT MAX((substring(${column} from '^${normalizedPrefix}([0-9]+)$'))::int) AS max_no
+     FROM ${table}
+     WHERE ${column} ~ '^${normalizedPrefix}[0-9]+$'`
+  )).join('\nUNION ALL\n');
+
+  const result = await client.query(`SELECT COALESCE(MAX(max_no), 0) + 1 AS next_no FROM (${unionSql}) refs`);
+  return `${normalizedPrefix}${Number(result.rows[0].next_no || 1)}`;
+}
+
+async function getNextVoucherNo(client) {
+  await client.query("SELECT pg_advisory_xact_lock(hashtext('accounting-ref-VCE'))");
+  const result = await client.query(`
+    SELECT 'VCE' || (COALESCE(MAX(max_no), 0) + 1) AS next_no
+    FROM (
+      SELECT MAX((substring(reference_no from '^VCE([0-9]+)$'))::int) AS max_no
+      FROM ac_debtors WHERE reference_no ~ '^VCE[0-9]+$'
+      UNION ALL
+      SELECT MAX((substring(receipt_no from '^VCE([0-9]+)$'))::int)
+      FROM ac_debtors WHERE receipt_no ~ '^VCE[0-9]+$'
+      UNION ALL
+      SELECT MAX((substring(voucher_no from '^VCE([0-9]+)$'))::int)
+      FROM ac_cash_book WHERE voucher_no ~ '^VCE[0-9]+$'
+      UNION ALL
+      SELECT MAX((substring(transaction_no from '^VCE([0-9]+)$'))::int)
+      FROM ac_cash_book WHERE transaction_no ~ '^VCE[0-9]+$'
+      UNION ALL
+      SELECT MAX((substring(reference_no from '^VC([0-9]+)$'))::int)
+      FROM ac_debtors WHERE reference_no ~ '^VC[0-9]+$'
+      UNION ALL
+      SELECT MAX((substring(voucher_no from '^VC([0-9]+)$'))::int)
+      FROM ac_cash_book WHERE voucher_no ~ '^VC[0-9]+$'
+      UNION ALL
+      SELECT MAX((substring(transaction_no from '^VC([0-9]+)$'))::int)
+      FROM ac_cash_book WHERE transaction_no ~ '^VC[0-9]+$'
+    ) refs
+  `);
+  return result.rows[0].next_no;
+}
+
+async function getNextLegacyVoucherNo(client) {
+  return getNextAccountingReference(client, 'VC', [
+    { table: 'ac_debtors', column: 'reference_no' },
+    { table: 'ac_debtors', column: 'receipt_no' },
+    { table: 'ac_cash_book', column: 'voucher_no' },
+    { table: 'ac_cash_book', column: 'transaction_no' },
+  ]);
+}
+
+async function getNextInterestReferenceNo(client) {
+  return getNextAccountingReference(client, 'INT', [
+    { table: 'ac_debtors', column: 'reference_no' },
+    { table: 'ac_ledger', column: 'voucher_no' },
+    { table: 'ac_ledger', column: 'receipt_no' },
+    { table: 'ac_ledger', column: 'transaction_no' },
+  ]);
+}
+
+function addDays(date, days) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+async function getEmergencyAdvanceEligibility(client, memberNo) {
+  const result = await client.query(
+    `SELECT
+       COALESCE((SELECT SUM(COALESCE(credit, 0) - COALESCE(debit, 0))
+                 FROM ac_shares_ledger
+                 WHERE account_no = $1), 0) AS savings_balance,
+       COALESCE((SELECT SUM(COALESCE(credit, 0) - COALESCE(debit, 0))
+                 FROM ac_shares_capital
+                 WHERE account_no = $1), 0) AS share_capital,
+       COALESCE((SELECT MAX(outstanding)
+                 FROM (
+                   SELECT SUM(COALESCE(d.balance, 0) - COALESCE(d.credit_bal, 0)) AS outstanding
+                   FROM ac_debtors d
+                   JOIN pb_saccoloan l ON l.mem_no = d.account_no AND l.loan_no = d.invoice_no
+                   WHERE d.account_no = $1
+                     AND upper(coalesce(l.lpurpose, d.item, '')) = $2
+                   GROUP BY d.invoice_no
+                   HAVING SUM(COALESCE(d.balance, 0) - COALESCE(d.credit_bal, 0)) > 0
+                 ) active_advances), 0) AS active_advance_balance,
+       COALESCE((SELECT COUNT(*)
+                 FROM pb_saccoloan
+                 WHERE mem_no = $1
+                   AND upper(coalesce(lpurpose, '')) = $2
+                   AND COALESCE(processed, false) = false), 0) AS pending_advances`,
+    [memberNo, EMERGENCY_ADVANCE_PURPOSE]
+  );
+
+  return result.rows[0] || {};
+}
+
+app.post('/api/v1/emergency-advance/quote', requireVerifiedProxyAuth, async (req, res) => {
+  const memberNo = normalizeAuthMemberNo(req.body?.memberNo);
+  const amount = Number(req.body?.amount || 0);
+  const periodDays = Number(req.body?.periodDays || EMERGENCY_ADVANCE_ALLOWED_DAYS[0]);
+
+  if (!memberNo || memberNo !== req.auth.memberNo) {
+    return res.status(403).json({ success: false, message: 'You can only quote an advance for your own account.' });
+  }
+  if (!EMERGENCY_ADVANCE_ALLOWED_DAYS.includes(periodDays)) {
+    return res.status(400).json({ success: false, message: 'Select a valid repayment period: 7, 14, or 21 days.' });
+  }
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return res.status(400).json({ success: false, message: 'Enter a valid emergency advance amount.' });
+  }
+  if (amount > EMERGENCY_ADVANCE_MAX_AMOUNT) {
+    return res.status(400).json({ success: false, message: `Emergency Advance is capped at KES ${EMERGENCY_ADVANCE_MAX_AMOUNT.toLocaleString('en-KE')}.` });
+  }
+
+  const eligibility = await getEmergencyAdvanceEligibility(dbPool, memberNo);
+  const savingsBalance = Number(eligibility.savings_balance || 0);
+  const savingsBasedLimit = Math.max(0, Math.floor(savingsBalance * (EMERGENCY_ADVANCE_LIMIT_SAVINGS_RATE / 100)));
+  const eligibleLimit = Math.min(EMERGENCY_ADVANCE_MAX_AMOUNT, savingsBasedLimit);
+
+  if (amount > eligibleLimit) {
+    return res.status(403).json({
+      success: false,
+      message: `Your Emergency Advance limit is KES ${eligibleLimit.toLocaleString('en-KE')}, based on 10% of your savings balance.`,
+      eligibility: { savingsBalance, eligibleLimit },
+    });
+  }
+
+  const calculation = calculateEmergencyAdvance(amount, periodDays);
+  const startDate = new Date();
+  const dueDate = addDays(startDate, periodDays);
+
+  return res.json({
+    success: true,
+    product: EMERGENCY_ADVANCE_PURPOSE,
+    allowedPeriods: EMERGENCY_ADVANCE_ALLOWED_DAYS,
+    periodDays,
+    monthlyRate: EMERGENCY_ADVANCE_MONTHLY_RATE,
+    eligibility: { savingsBalance, savingsBasedLimit, eligibleLimit },
+    calculation,
+    dueDate: dueDate.toISOString(),
+    b2cConfigured: getB2CConfig().enabled,
+  });
+});
+
+app.post('/api/v1/emergency-advance/apply', requireVerifiedProxyAuth, async (req, res) => {
+  const memberNo = normalizeAuthMemberNo(req.body?.memberNo);
+  const amount = Number(req.body?.amount || 0);
+  const periodDays = Number(req.body?.periodDays || EMERGENCY_ADVANCE_ALLOWED_DAYS[0]);
+  const b2cConfig = getB2CConfig();
+
+  if (!memberNo || memberNo !== req.auth.memberNo) {
+    return res.status(403).json({ success: false, message: 'You can only apply for an advance on your own account.' });
+  }
+  if (!EMERGENCY_ADVANCE_ALLOWED_DAYS.includes(periodDays)) {
+    return res.status(400).json({ success: false, message: 'Select a valid repayment period: 7, 14, or 21 days.' });
+  }
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return res.status(400).json({ success: false, message: 'Enter a valid emergency advance amount.' });
+  }
+  if (amount > EMERGENCY_ADVANCE_MAX_AMOUNT) {
+    return res.status(400).json({ success: false, message: `Emergency Advance is capped at KES ${EMERGENCY_ADVANCE_MAX_AMOUNT.toLocaleString('en-KE')}.` });
+  }
+  if (!b2cConfig.enabled) {
+    return res.status(503).json({
+      success: false,
+      message: 'Emergency Advance disbursement is not configured yet. Please set the M-Pesa B2C credentials before enabling this service.',
+      code: 'MPESA_B2C_NOT_CONFIGURED',
+    });
+  }
+
+  const client = await dbPool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const memberResult = await client.query(
+      `SELECT acc_no, holders_name, id_no, email_add, tel1, postal_address, postal_code, mem_category,
+              COALESCE(loan_blacklisted, false) AS loan_blacklisted
+       FROM pb_share_register
+       WHERE upper(trim(acc_no)) = $1`,
+      [memberNo]
+    );
+
+    if (memberResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Member record not found.' });
+    }
+
+    const member = memberResult.rows[0];
+    const configuredTestPhone = process.env.MPESA_ENV !== 'production'
+      ? process.env.MPESA_B2C_TEST_PHONE
+      : '';
+    const phoneNumber = normalizePhoneNumber(configuredTestPhone || member.tel1);
+    if (!/^254\d{9}$/.test(phoneNumber)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'A valid M-Pesa phone number is required for disbursement.' });
+    }
+
+    if (member.loan_blacklisted) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ success: false, message: 'Your account is currently not eligible for emergency advances.' });
+    }
+
+    const eligibility = await getEmergencyAdvanceEligibility(client, memberNo);
+    const savingsBalance = Number(eligibility.savings_balance || 0);
+    const activeAdvanceBalance = Number(eligibility.active_advance_balance || 0);
+    const pendingAdvances = Number(eligibility.pending_advances || 0);
+    const savingsBasedLimit = Math.max(0, Math.floor(savingsBalance * (EMERGENCY_ADVANCE_LIMIT_SAVINGS_RATE / 100)));
+    const eligibleLimit = Math.min(EMERGENCY_ADVANCE_MAX_AMOUNT, savingsBasedLimit);
+
+    if (activeAdvanceBalance > 0 || pendingAdvances > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({
+        success: false,
+        message: 'You already have an active or pending Emergency Advance. Please clear it before applying for another one.',
+        eligibility: { activeAdvanceBalance, pendingAdvances },
+      });
+    }
+
+    if (amount > eligibleLimit) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({
+        success: false,
+        message: `Your Emergency Advance limit is KES ${formatKES(eligibleLimit)}, based on 10% of your savings balance.`,
+        eligibility: { savingsBalance, savingsBasedLimit, eligibleLimit, requestedAmount: amount },
+      });
+    }
+
+    const { principal, charge, total } = calculateEmergencyAdvance(amount, periodDays);
+    const startDate = new Date();
+    const dueDate = addDays(startDate, periodDays);
+
+    const insertResult = await client.query(
+      `INSERT INTO pb_saccoloan (
+         mem_no, member_name, loan_no, postal_address, postal_code, email_address, id_no,
+         lpurpose, pymt_terms, cdate, edate, amount, period, repayment, interest,
+         premium, total, user_name, input_date, charge_int, processed, sms_sent,
+         sms_processed, wstation, security
+       )
+       VALUES (
+         $1, $2, NULL, $3, $4, $5, $6,
+         $7, $16, $8, $9, $10, $11, $12, $13,
+         $14, $15, 'centre', $8, true, false, false, false, 'M-Pesa B2C', 'Shares'
+       )
+       RETURNING id`,
+      [
+        memberNo,
+        member.holders_name || memberNo,
+        member.postal_address || null,
+        member.postal_code || null,
+        member.email_add || null,
+        member.id_no || null,
+        EMERGENCY_ADVANCE_PURPOSE,
+        startDate,
+        dueDate,
+        principal,
+        periodDays,
+        total,
+        EMERGENCY_ADVANCE_MONTHLY_RATE,
+        charge,
+        total,
+        `${periodDays} days`,
+      ]
+    );
+
+    const loanRow = await client.query('SELECT loan_no FROM pb_saccoloan WHERE id = $1', [insertResult.rows[0].id]);
+    const loanNo = loanRow.rows[0]?.loan_no;
+    if (!loanNo) {
+      throw new Error('Emergency Advance loan number was not generated.');
+    }
+
+    const requestConversationId = `${b2cConfig.shortcode}_${memberNo}_${loanNo}_${Date.now()}`.replace(/[^A-Za-z0-9_-]/g, '_');
+    const b2cResponse = await initiateB2CPayment({
+      originatorConversationId: requestConversationId,
+      phoneNo: phoneNumber,
+      amount: principal,
+      remarks: `Emergency Advance ${loanNo}`,
+      occasion: memberNo,
+    });
+
+    const originatorConversationId = b2cResponse.OriginatorConversationID || requestConversationId;
+    const conversationId = b2cResponse.ConversationID || null;
+    const responseCode = b2cResponse.ResponseCode || null;
+    const responseDescription = b2cResponse.ResponseDescription || b2cResponse.ResponseMessage || null;
+
+    await client.query(
+      `INSERT INTO pb_mpesa_b2c_transactions (
+         originator_conversation_id, conversation_id, loan_no, member_no, phone_no,
+         amount, period_days, charge, total_repayable, status, response_code, response_desc, request_raw
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+      [
+        originatorConversationId,
+        conversationId,
+        loanNo,
+        memberNo,
+        phoneNumber,
+        principal,
+        periodDays,
+        charge,
+        total,
+        String(responseCode) === '0' ? 'pending' : 'failed',
+        responseCode,
+        responseDescription,
+        JSON.stringify(b2cResponse),
+      ]
+    );
+
+    await client.query('COMMIT');
+
+    return res.status(202).json({
+      success: true,
+      loanNo,
+      originatorConversationId,
+      conversationId,
+      message: 'Emergency Advance request accepted. Disbursement confirmation is pending from M-Pesa.',
+      calculation: { principal, charge, total, periodDays },
+      b2c: b2cResponse,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Emergency Advance application failed:', error.response?.data || error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'We could not process the Emergency Advance right now.',
+    });
+  } finally {
+    client.release();
+  }
+});
+
+function extractB2CResultParameters(parameters) {
+  const map = {};
+  (parameters || []).forEach((item) => {
+    if (item?.Key) map[item.Key] = item.Value;
+  });
+  return map;
+}
+
+function getFriendlyB2CResultMessage(resultCode, resultDesc) {
+  const code = Number(resultCode);
+  if (code === 0) return 'Emergency Advance disbursed successfully.';
+  if (code === 2040) {
+    return 'M-Pesa could not disburse this Emergency Advance to the registered number using the current B2C setup. Please contact the Sacco office.';
+  }
+  if (code === 8006) {
+    return 'M-Pesa could not disburse this Emergency Advance because the B2C security credential is locked. Please contact the Sacco office.';
+  }
+  if (/insufficient/i.test(String(resultDesc || ''))) {
+    return 'M-Pesa could not disburse this Emergency Advance because the payout account has insufficient funds.';
+  }
+  return 'M-Pesa could not complete the Emergency Advance disbursement. Please try again later or contact the Sacco office.';
+}
+
+app.get('/api/v1/mpesa/b2c/status/:conversationId', requireVerifiedProxyAuth, async (req, res) => {
+  const conversationId = String(req.params.conversationId || '').trim();
+  if (!conversationId) {
+    return res.status(400).json({ success: false, message: 'Missing B2C transaction reference.' });
+  }
+
+  try {
+    const result = await dbPool.query(
+      `SELECT loan_no, member_no, phone_no, amount, period_days, charge, total_repayable,
+              status, result_code, result_desc, transaction_id, ledger_posted,
+              ledger_posted_at, receipt_emailed, created_at, updated_at
+       FROM pb_mpesa_b2c_transactions
+       WHERE (originator_conversation_id = $1 OR conversation_id = $1)
+         AND member_no = $2
+       ORDER BY id DESC
+       LIMIT 1`,
+      [conversationId, req.auth.memberNo]
+    );
+
+    const txn = result.rows[0];
+    if (!txn) {
+      return res.status(404).json({ success: false, message: 'B2C transaction not found yet.' });
+    }
+
+    return res.json({
+      success: true,
+      loanNo: txn.loan_no,
+      memberNo: txn.member_no,
+      phoneNo: txn.phone_no,
+      amount: Number(txn.amount || 0),
+      periodDays: Number(txn.period_days || 0),
+      charge: Number(txn.charge || 0),
+      totalRepayable: Number(txn.total_repayable || 0),
+      status: txn.status,
+      message: getFriendlyB2CResultMessage(txn.result_code, txn.result_desc),
+      resultCode: txn.result_code,
+      resultDesc: txn.result_desc,
+      mpesaReceiptNo: txn.transaction_id,
+      ledgerPosted: txn.ledger_posted,
+      receiptEmailed: txn.receipt_emailed,
+      transactionDate: txn.ledger_posted_at || txn.updated_at || txn.created_at,
+    });
+  } catch (error) {
+    console.error('B2C status lookup failed:', error.message);
+    return res.status(500).json({ success: false, message: 'Unable to check Emergency Advance status right now.' });
+  }
+});
+
+app.post('/api/v1/mpesa/b2c/result', async (req, res) => {
+  const ackResponse = { ResultCode: 0, ResultDesc: 'Accepted' };
+  const result = req.body?.Result;
+  if (!result) return res.status(200).json(ackResponse);
+
+  const originatorConversationId = result.OriginatorConversationID;
+  const conversationId = result.ConversationID;
+  const resultCode = Number(result.ResultCode);
+  const params = extractB2CResultParameters(result.ResultParameters?.ResultParameter);
+  const transactionId = params.TransactionReceipt || params.TransactionID || null;
+
+  const client = await dbPool.connect();
+  let receiptEmailTransactionId = null;
+  try {
+    await client.query('BEGIN');
+
+    const updateResult = await client.query(
+      `UPDATE pb_mpesa_b2c_transactions
+       SET status = $3,
+           result_code = $4,
+           result_desc = $5,
+           transaction_id = $6,
+           result_raw = $7,
+           updated_at = now()
+       WHERE (originator_conversation_id = $1 OR conversation_id = $2)
+         AND ledger_posted = false
+       RETURNING id, loan_no, member_no, amount, charge, total_repayable`,
+      [
+        originatorConversationId,
+        conversationId,
+        resultCode === 0 ? 'success' : 'failed',
+        resultCode,
+        result.ResultDesc || null,
+        transactionId,
+        JSON.stringify(req.body),
+      ]
+    );
+
+    const txn = updateResult.rows[0];
+    if (txn && resultCode === 0) {
+      const memberResult = await client.query(
+        `SELECT holders_name, mem_category
+         FROM pb_share_register
+         WHERE acc_no = $1`,
+        [txn.member_no]
+      );
+      const member = memberResult.rows[0] || {};
+      const memberName = member.holders_name || txn.member_no;
+      const memberGroup = getEmergencyAdvanceMemberGroup(member);
+      const voucherNo = await getNextVoucherNo(client);
+      const interestReferenceNo = await getNextInterestReferenceNo(client);
+      const mpesaReference = String(transactionId || '').slice(0, 50) || null;
+      const b2cAccountNo = process.env.MPESA_B2C_CASHBOOK_ACCOUNT_NO
+        || process.env.MPESA_B2C_SHORTCODE
+        || process.env.MPESA_SHORTCODE
+        || '3011803';
+
+      await client.query(
+        `INSERT INTO ac_debtors (
+           activity_code, dealer, item, payee, reason, account_no, receipt_no,
+           cheque_no, journal_no, reference_no, transaction_type, debit, credit,
+           date, invoice_no, description, approved, paid, user_name, cash_point,
+           balance, credit_bal, trans_date
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7,
+                 $8, '', $7, 'Payments', $9, 0,
+                 now(), $10, 'DEBTORS LEDGER', true, false, $11, 'Cashier',
+                 $9, 0, now())`,
+        [
+          EMERGENCY_ADVANCE_DEBTOR_CODE,
+          memberGroup,
+          EMERGENCY_ADVANCE_PURPOSE,
+          memberName,
+          'Emergency Advance loan',
+          txn.member_no,
+          voucherNo,
+          mpesaReference,
+          txn.amount,
+          txn.loan_no,
+          EMERGENCY_ADVANCE_ACCOUNTING_USER,
+        ]
+      );
+
+      if (Number(txn.charge || 0) > 0) {
+        await client.query(
+          `INSERT INTO ac_debtors (
+             activity_code, dealer, item, payee, reason, account_no, receipt_no,
+             cheque_no, journal_no, reference_no, transaction_type, debit, credit,
+             date, invoice_no, description, approved, paid, user_name,
+             balance, credit_bal, trans_date
+           )
+           VALUES ($1, $2, $3, $4, 'Instant Advance Interest', $5, '',
+                   $6, '12.00', $7, 'Interest', $8, 0,
+                   now(), $9, 'Debtors', false, false, $10,
+                   $8, 0, now())`,
+          [
+            EMERGENCY_ADVANCE_DEBTOR_CODE,
+            memberGroup,
+            EMERGENCY_ADVANCE_PURPOSE,
+            memberName,
+            txn.member_no,
+            mpesaReference,
+            voucherNo,
+            txn.loan_no,
+            txn.charge,
+            EMERGENCY_ADVANCE_ACCOUNTING_USER,
+          ]
+        );
+
+        await client.query(
+          `INSERT INTO ac_ledger (
+             activity_code, description, patient_no, dealer, reason, voucher_no,
+             payee, gl_code, cheque_no, receipt_no, journal_no, service_type,
+             transaction_type, debit, credit, date, transaction_no, closed,
+             reconciled, withdrawn, user_name, billing_time
+           )
+           VALUES ($1, $2, $3, $4, 'Interest', $5,
+                   $6, $7, $8, $5, $9, $2,
+                   'Interest', 0, $10, now(), $5, false,
+                   false, false, $11, now())`,
+          [
+            EMERGENCY_ADVANCE_INTEREST_CODE,
+            EMERGENCY_ADVANCE_PURPOSE,
+            txn.member_no,
+            memberName,
+            interestReferenceNo,
+            memberGroup,
+            EMERGENCY_ADVANCE_DEBTOR_CODE,
+            mpesaReference,
+            txn.loan_no,
+            txn.charge,
+            EMERGENCY_ADVANCE_ACCOUNTING_USER,
+          ]
+        );
+      }
+
+      await client.query(
+        `INSERT INTO ac_cash_book (
+           activity_code, description, dealer, payment_mode, voucher_no, payee,
+           drawer, drawer_bank, gl_code, cheque_no, slip_no, receipt_no,
+           journal_no, account_no, account_name, bank_name, transaction_type,
+           debit, credit, date, transaction_no, closed, reconciled, banked,
+           user_name, cash_point, shift_no, chq_date, approved, fm_approval
+         )
+         VALUES ($1, $2, $3, 'M-PESA', $4, $3,
+                 $5, '', $6, $7, '', '',
+                 $8, $9, 'M-Pesa B2C', 'MPESA B2C', 'Payment',
+                 0, $10, now(), $4, true, false, false,
+                 $11, 'Cashier', '', now(), false, false)`,
+        [
+          EMERGENCY_ADVANCE_DEBTOR_CODE,
+          EMERGENCY_ADVANCE_PURPOSE,
+          memberName,
+          voucherNo,
+          memberGroup,
+          MPESA_B2C_GL_CODE,
+          mpesaReference,
+          txn.loan_no,
+          b2cAccountNo,
+          txn.amount,
+          EMERGENCY_ADVANCE_ACCOUNTING_USER,
+        ]
+      );
+
+      await client.query(
+        `UPDATE pb_saccoloan
+         SET processed = true, sms_processed = false
+         WHERE loan_no = $1 AND mem_no = $2`,
+        [txn.loan_no, txn.member_no]
+      );
+
+      await client.query(
+        `UPDATE pb_mpesa_b2c_transactions
+         SET ledger_posted = true,
+             ledger_posted_at = now(),
+             voucher_no = $2,
+             interest_reference_no = $3,
+             accounting_user = $4
+         WHERE id = $1`,
+        [txn.id, voucherNo, interestReferenceNo, EMERGENCY_ADVANCE_ACCOUNTING_USER]
+      );
+      receiptEmailTransactionId = txn.id;
+    } else if (txn && resultCode !== 0) {
+      await client.query(
+        `DELETE FROM pb_saccoloan l
+         WHERE l.loan_no = $1
+           AND l.mem_no = $2
+           AND upper(coalesce(l.lpurpose, '')) = $3
+           AND COALESCE(l.processed, false) = false
+           AND NOT EXISTS (
+             SELECT 1
+             FROM ac_debtors d
+             WHERE d.account_no = l.mem_no
+               AND d.invoice_no = l.loan_no
+           )`,
+        [txn.loan_no, txn.member_no, EMERGENCY_ADVANCE_PURPOSE]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    if (receiptEmailTransactionId) {
+      setImmediate(() => {
+        sendEmergencyAdvanceReceipt({ b2cTransactionId: receiptEmailTransactionId })
+          .catch((err) => console.error('Failed to send Emergency Advance receipt email:', err.message));
+      });
+    }
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('B2C result callback failed:', error.message);
+  } finally {
+    client.release();
+  }
+
+  return res.status(200).json(ackResponse);
+});
+
+app.post('/api/v1/mpesa/b2c/timeout', async (req, res) => {
+  const result = req.body?.Result || req.body;
+  const client = await dbPool.connect();
+  try {
+    await client.query('BEGIN');
+    const updateResult = await client.query(
+      `UPDATE pb_mpesa_b2c_transactions
+       SET status = 'timeout',
+           result_desc = COALESCE($3, result_desc),
+           result_raw = $4,
+           updated_at = now()
+       WHERE originator_conversation_id = $1 OR conversation_id = $2
+       RETURNING loan_no, member_no`,
+      [
+        result?.OriginatorConversationID || null,
+        result?.ConversationID || null,
+        result?.ResultDesc || 'B2C request timed out before confirmation.',
+        JSON.stringify(req.body),
+      ]
+    );
+
+    const txn = updateResult.rows[0];
+    if (txn) {
+      await client.query(
+        `DELETE FROM pb_saccoloan l
+         WHERE l.loan_no = $1
+           AND l.mem_no = $2
+           AND upper(coalesce(l.lpurpose, '')) = $3
+           AND COALESCE(l.processed, false) = false
+           AND NOT EXISTS (
+             SELECT 1
+             FROM ac_debtors d
+             WHERE d.account_no = l.mem_no
+               AND d.invoice_no = l.loan_no
+           )`,
+        [txn.loan_no, txn.member_no, EMERGENCY_ADVANCE_PURPOSE]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('B2C timeout callback failed:', error.message);
+  } finally {
+    client.release();
+  }
+
+  return res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
+});
+
+// ============================================
 // LOCAL ENDPOINT: M-PESA STK PUSH (INITIATE PAYMENT)
 // ============================================
 const MPESA_MIN_AMOUNT = 10;
@@ -2756,11 +3640,15 @@ app.get('/api/v1/instant/:memberNo', async (req, res) => {
               repayment,
               total,
               COALESCE(NULLIF(wstation, ''), 'N/A') AS "payMode",
-              ROUND(SUM(COALESCE(balance, 0) - COALESCE(credit_bal, 0))::numeric, 2) AS "outStanding"
+              ROUND(SUM(COALESCE(balance, 0) - COALESCE(credit_bal, 0))::numeric, 2) AS "outStanding",
+              CASE
+                WHEN ROUND(SUM(COALESCE(balance, 0) - COALESCE(credit_bal, 0))::numeric, 2) < 0 THEN 'Credit Balance'
+                ELSE 'Active'
+              END AS status
        FROM ac_debtors, pb_saccoloan
        WHERE mem_no = account_no
-         AND invoice_no = loan_no
-         AND account_no = $1
+        AND invoice_no = loan_no
+        AND account_no = $1
         GROUP BY loan_no, lpurpose, amount, cdate, edate, period, interest, repayment, total, wstation
        HAVING ABS(ROUND(SUM(COALESCE(balance, 0) - COALESCE(credit_bal, 0))::numeric, 2)) >= ${LOAN_OUTSTANDING_TOLERANCE}
        ORDER BY cdate`,
@@ -2942,7 +3830,7 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
 
       transResult = await dbPool.query(
         `SELECT TO_CHAR(date, 'DD/MM/YYYY') as trans_date,
-                initcap(item) as item, reference_no, receipt_no,
+                initcap(item) as item, reference_no, receipt_no, cheque_no,
                 COALESCE(balance, 0) as debit, COALESCE(credit_bal, 0) as credit
          FROM ac_debtors 
          WHERE account_no = $1 AND invoice_no = $2
@@ -3177,7 +4065,7 @@ app.post('/api/v1/loan-statement-direct', async (req, res) => {
           date: row.trans_date || '-',
           description: row.item || 'Transaction',
           refNo: row.reference_no || '-',
-          receiptNo: row.receipt_no || '-',
+          receiptNo: row.cheque_no || row.receipt_no || '-',
           debit: debit > 0 ? formatMoney(debit) : '-',
           credit: credit > 0 ? formatMoney(credit) : '-',
           balance: formatMoney(runningBalance),
@@ -3442,7 +4330,7 @@ app.post('/api/v1/withdrawable-statement-direct', async (req, res) => {
         date: row.trans_date || '-',
         description: row.item || 'Transaction',
         refNo: row.reference_no || '-',
-        receiptNo: row.receipt_no || '-',
+        receiptNo: row.cheque_no || row.receipt_no || '-',
         debit: debit > 0 ? formatMoney(debit) : '-',
         credit: credit > 0 ? formatMoney(credit) : '-',
         balance: formatMoney(runningBalance),

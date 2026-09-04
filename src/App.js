@@ -71,7 +71,7 @@ const Sidebar = ({ isOpen, onClose }) => {
   const menuItems = [
     { path: '/', label: 'Dashboard', icon: FaChartPie },
     { path: '/profile', label: 'Member Profile', icon: FaUserCircle },
-    { path: '/apply-loan', label: 'Instant Loan', icon: FaHandHoldingUsd },
+    { path: '/apply-loan', label: 'Loans & Advances', icon: FaHandHoldingUsd },
     { path: '/dividends', label: 'Dividends', icon: FaCoins },
     { path: '/loan-statement', label: 'Loan Statement', icon: FaFileInvoiceDollar },
     { path: '/guarantors', label: 'Guarantors', icon: FaUserFriends },
@@ -183,7 +183,7 @@ const TopBar = ({ onMenuToggle }) => {
   const pageTitles = {
     '/': 'Dashboard',
     '/profile': 'Member Profile',
-    '/apply-loan': 'Apply Instant Loan',
+    '/apply-loan': 'Loans & Advances',
     '/dividends': 'Dividends',
     '/loan-statement': 'Loan Statement',
     '/guarantors': 'Guarantors',

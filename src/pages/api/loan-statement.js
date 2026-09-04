@@ -60,6 +60,7 @@ export default async function handler(req, res) {
       SELECT 
         TO_CHAR(date, 'YYYY-MM-DD') as date,
         receipt_no,
+        cheque_no,
         item as description,
         reason,
         reference_no,
@@ -84,7 +85,7 @@ export default async function handler(req, res) {
       
       return {
         date: row.date,
-        receiptNo: row.receipt_no || 'N/A',
+        receiptNo: row.cheque_no || row.receipt_no || 'N/A',
         description: row.description || 'N/A',
         reason: row.reason || '',
         referenceNo: row.reference_no || 'N/A',

@@ -104,52 +104,45 @@ function LoanStatement() {
     });
     
     // Treat sub-shilling residues as rounding noise so cleared loans do not
-    // appear as open credit balances.
-    const activeLoans = loans.filter(loan => {
+    // appear in the member-facing list once fully paid.
+    const activeLoans = loans.filter((loan) => {
       const outstanding = cleanOutstandingValue(loan);
       const isPending = Boolean(loan.isPending);
-      const hasOpenBalance = isPending || outstanding !== 0;
-      
-      if (!hasOpenBalance) {
-        console.log(`❌ FILTERED OUT (Completed): ${loan.loanNo} - Outstanding: ${outstanding}`);
-      } else {
-        console.log(`✅ KEEP (Open balance): ${loan.loanNo} - Outstanding: ${outstanding}`);
-      }
-      
-      return hasOpenBalance;
+      return isPending || outstanding !== 0;
     });
     
     console.log(`\n=== RESULTS ===`);
     console.log(`Open loan balances: ${activeLoans.length}`);
     console.log(`Completed loans filtered out: ${loans.length - activeLoans.length}`);
     
-    // Format active loans for display
-    const formattedLoans = activeLoans.map((item, index) => ({
-      id: index,
-      loanNo: item.loanNo || 'N/A',
-      purpose: item.loanPurpose || 'N/A',
-      sdate: formatDateOnly(item.startDate),
-      edate: formatDateOnly(item.endDate),
-      rawStartDate: item.startDate || null,
-      rawEndDate: item.endDate || null,
-      period: item.period !== null && item.period !== undefined ? item.period : 'N/A',
-      originalAmount: parseFloat(item.amount) || 0,
-      balance: cleanOutstandingValue(item),
-      monthlyRepayment: Number(item.repayment || item.monthlyRepayment || item.monthly_repayment || 0),
-      totalRepayable: Number(item.total ?? item.totalRepayable ?? item.total_repayable ?? 0),
-      payMode: item.payMode || item.wstation || 'N/A',
-      interestRate: item.interest ?? item.interestRate ?? item.interest_rate ?? 0,
-      status: item.status || (item.isPending ? 'Pending Approval' : cleanOutstandingValue(item) < 0 ? 'Credit Balance' : 'Active'),
-      isPending: Boolean(item.isPending),
-    }));
+    const formattedLoans = activeLoans.map((item, index) => {
+      const outstanding = cleanOutstandingValue(item);
+      return {
+        id: index,
+        loanNo: item.loanNo || 'N/A',
+        purpose: item.loanPurpose || 'N/A',
+        sdate: formatDateOnly(item.startDate),
+        edate: formatDateOnly(item.endDate),
+        rawStartDate: item.startDate || null,
+        rawEndDate: item.endDate || null,
+        period: item.period !== null && item.period !== undefined ? item.period : 'N/A',
+        originalAmount: parseFloat(item.amount) || 0,
+        balance: outstanding,
+        monthlyRepayment: Number(item.repayment || item.monthlyRepayment || item.monthly_repayment || 0),
+        totalRepayable: Number(item.total ?? item.totalRepayable ?? item.total_repayable ?? 0),
+        payMode: item.payMode || item.wstation || 'N/A',
+        interestRate: item.interest ?? item.interestRate ?? item.interest_rate ?? 0,
+        status: item.status || (item.isPending ? 'Pending Approval' : outstanding < 0 ? 'Credit Balance' : 'Active'),
+        isPending: Boolean(item.isPending),
+      };
+    });
     
     setLoanData(formattedLoans);
     
-    // Set appropriate message
     if (formattedLoans.length === 0 && loans.length > 0) {
-      setError(`✓ No open loan balances found. All ${loans.length} loan(s) have been fully settled.`);
+      setError(`All ${loans.length} loan(s) have been fully settled.`);
     } else if (loans.length === 0) {
-      setError('No loan records found in the system.');
+      setError('No open loan records found in the system.');
     } else {
       setError('');
     }
@@ -688,7 +681,7 @@ function LoanStatement() {
                   <th>Purpose</th>
                   <th>Start Date</th>
                   <th>End Date</th>
-                  <th>Period (Months)</th>
+                  <th>Period</th>
                   <th>Interest</th>
                   <th>Pay Mode</th>
                   <th>Principal (KES)</th>
