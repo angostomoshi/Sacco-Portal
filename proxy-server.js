@@ -1,4 +1,8 @@
-require('dotenv').config();
+require('dotenv').config({
+  path: require('path').join(__dirname, '.env'),
+  override: true,
+});
+const { getMpesaRuntime, describeMpesaRequest } = require('./lib/mpesa-runtime');
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -207,21 +211,29 @@ function normalizePhoneNumber(phoneNumber) {
 // ============================================
 // M-PESA (DARAJA) HELPERS
 // ============================================
-const MPESA_BASE_URL = process.env.MPESA_ENV === 'production'
-  ? 'https://api.safaricom.co.ke'
-  : 'https://sandbox.safaricom.co.ke';
+const mpesaRuntime = getMpesaRuntime(process.env);
+process.env.MPESA_ENV = mpesaRuntime.environment;
+const MPESA_BASE_URL = mpesaRuntime.baseUrl;
+console.log('[MPESA] Runtime:', {
+  ...mpesaRuntime,
+  pid: process.pid,
+  stkShortcode: process.env.MPESA_SHORTCODE,
+  b2cShortcode: process.env.MPESA_B2C_SHORTCODE,
+});
 
-let mpesaTokenCache = { token: null, expiresAt: 0 };
+const mpesaTokenCache = new Map();
 
-async function getMpesaAccessToken() {
-  if (mpesaTokenCache.token && Date.now() < mpesaTokenCache.expiresAt - 60000) {
-    return mpesaTokenCache.token;
+async function getMpesaAccessToken(options = {}) {
+  const cacheKey = options.cacheKey || 'default';
+  const cached = mpesaTokenCache.get(cacheKey);
+  if (cached?.token && Date.now() < cached.expiresAt - 60000) {
+    return cached.token;
   }
 
-  const consumerKey = process.env.MPESA_CONSUMER_KEY;
-  const consumerSecret = process.env.MPESA_CONSUMER_SECRET;
+  const consumerKey = options.consumerKey || process.env.MPESA_CONSUMER_KEY;
+  const consumerSecret = options.consumerSecret || process.env.MPESA_CONSUMER_SECRET;
   if (!consumerKey || !consumerSecret) {
-    throw new Error('MPESA_CONSUMER_KEY / MPESA_CONSUMER_SECRET are not configured.');
+    throw new Error(`${cacheKey === 'b2c' ? 'MPESA_B2C_CONSUMER_KEY / MPESA_B2C_CONSUMER_SECRET' : 'MPESA_CONSUMER_KEY / MPESA_CONSUMER_SECRET'} are not configured.`);
   }
 
   const auth = Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64');
@@ -231,10 +243,10 @@ async function getMpesaAccessToken() {
   });
 
   const { access_token: token, expires_in: expiresIn } = response.data;
-  mpesaTokenCache = {
+  mpesaTokenCache.set(cacheKey, {
     token,
     expiresAt: Date.now() + (Number(expiresIn || 3600) * 1000),
-  };
+  });
 
   return token;
 }
@@ -267,12 +279,14 @@ async function initiateStkPush({ phoneNo, amount, accountReference, transactionD
   if (!callbackUrl) {
     throw new Error('MPESA_CALLBACK_URL is not configured.');
   }
+  console.log('[MPESA] Request:', describeMpesaRequest(mpesaRuntime, 'STK', shortcode, callbackUrl));
 
   const accessToken = await getMpesaAccessToken();
   const timestamp = buildMpesaTimestamp();
   const password = buildMpesaPassword(timestamp);
   const callbackSecret = process.env.MPESA_CALLBACK_SECRET;
-  const callbackUrlWithSecret = callbackSecret
+  const isPortalCallback = /\/api\/v1\/mpesa\/callback\/?$/.test(new URL(callbackUrl).pathname);
+  const callbackUrlWithSecret = callbackSecret && isPortalCallback
     ? `${callbackUrl}${callbackUrl.includes('?') ? '&' : '?'}key=${encodeURIComponent(callbackSecret)}`
     : callbackUrl;
 
@@ -301,7 +315,7 @@ async function initiateStkPush({ phoneNo, amount, accountReference, transactionD
 }
 
 function getB2CConfig() {
-  const mpesaCallbackBaseUrl = process.env.MPESA_CALLBACK_URL
+  const mpesaCallbackBaseUrl = /\/api\/v1\/mpesa\/callback\/?$/i.test(process.env.MPESA_CALLBACK_URL || '')
     ? process.env.MPESA_CALLBACK_URL.replace(/\/api\/v1\/mpesa\/callback\/?$/i, '')
     : '';
   const resultUrl = process.env.MPESA_B2C_RESULT_URL || (mpesaCallbackBaseUrl ? `${mpesaCallbackBaseUrl}/api/v1/mpesa/b2c/result` : '');
@@ -309,12 +323,16 @@ function getB2CConfig() {
   const initiatorName = process.env.MPESA_B2C_INITIATOR_NAME;
   const securityCredential = process.env.MPESA_B2C_SECURITY_CREDENTIAL;
   const shortcode = process.env.MPESA_B2C_SHORTCODE || process.env.MPESA_SHORTCODE;
+  const consumerKey = process.env.MPESA_B2C_CONSUMER_KEY || process.env.MPESA_CONSUMER_KEY;
+  const consumerSecret = process.env.MPESA_B2C_CONSUMER_SECRET || process.env.MPESA_CONSUMER_SECRET;
 
   return {
-    enabled: Boolean(resultUrl && timeoutUrl && initiatorName && securityCredential && shortcode),
+    enabled: Boolean(resultUrl && timeoutUrl && initiatorName && securityCredential && shortcode && consumerKey && consumerSecret),
     shortcode,
     initiatorName,
     securityCredential,
+    consumerKey,
+    consumerSecret,
     resultUrl,
     timeoutUrl,
     commandId: process.env.MPESA_B2C_COMMAND_ID || 'BusinessPayment',
@@ -326,8 +344,14 @@ async function initiateB2CPayment({ originatorConversationId, phoneNo, amount, r
   if (!config.enabled) {
     throw new Error('M-Pesa B2C is not fully configured.');
   }
+  describeMpesaRequest(mpesaRuntime, 'B2C timeout', config.shortcode, config.timeoutUrl);
+  console.log('[MPESA] Request:', describeMpesaRequest(mpesaRuntime, 'B2C', config.shortcode, config.resultUrl));
 
-  const accessToken = await getMpesaAccessToken();
+  const accessToken = await getMpesaAccessToken({
+    cacheKey: 'b2c',
+    consumerKey: config.consumerKey,
+    consumerSecret: config.consumerSecret,
+  });
   const response = await axios.post(
     `${MPESA_BASE_URL}/mpesa/b2c/v3/paymentrequest`,
     {
@@ -2391,9 +2415,11 @@ app.post('/api/v1/loan/apply', async (req, res) => {
 // LOCAL ENDPOINT: EMERGENCY ADVANCE (B2C)
 // ============================================
 const EMERGENCY_ADVANCE_PURPOSE = 'METRO SACCO EMERGENCY ADVANCE';
+const EMERGENCY_ADVANCE_MIN_AMOUNT = 1000;
 const EMERGENCY_ADVANCE_MAX_AMOUNT = 5000;
+const EMERGENCY_ADVANCE_MIN_CHARGE = 100;
 const EMERGENCY_ADVANCE_LIMIT_SAVINGS_RATE = 10;
-const EMERGENCY_ADVANCE_ALLOWED_DAYS = [7, 14, 21];
+const EMERGENCY_ADVANCE_ALLOWED_DAYS = [7, 14, 21, 30];
 const EMERGENCY_ADVANCE_MONTHLY_RATE = 10;
 const EMERGENCY_ADVANCE_ACCOUNTING_USER = 'b2c_user';
 const EMERGENCY_ADVANCE_DEBTOR_CODE = '20-23-131';
@@ -2403,9 +2429,10 @@ const MPESA_B2C_GL_CODE = '20-25-011';
 function calculateEmergencyAdvance(amount, periodDays) {
   const principal = Math.round(Number(amount || 0));
   const days = Number(periodDays || EMERGENCY_ADVANCE_ALLOWED_DAYS[0]);
-  const charge = Math.round(principal * (days / 30) * (EMERGENCY_ADVANCE_MONTHLY_RATE / 100));
+  const proratedCharge = Math.round(principal * (days / 30) * (EMERGENCY_ADVANCE_MONTHLY_RATE / 100));
+  const charge = principal > 0 ? Math.max(proratedCharge, EMERGENCY_ADVANCE_MIN_CHARGE) : 0;
   const total = principal + charge;
-  return { principal, charge, total, periodDays: days };
+  return { principal, charge, proratedCharge, minimumCharge: EMERGENCY_ADVANCE_MIN_CHARGE, total, periodDays: days };
 }
 
 function getEmergencyAdvanceMemberGroup(member) {
@@ -2523,10 +2550,13 @@ app.post('/api/v1/emergency-advance/quote', requireVerifiedProxyAuth, async (req
     return res.status(403).json({ success: false, message: 'You can only quote an advance for your own account.' });
   }
   if (!EMERGENCY_ADVANCE_ALLOWED_DAYS.includes(periodDays)) {
-    return res.status(400).json({ success: false, message: 'Select a valid repayment period: 7, 14, or 21 days.' });
+    return res.status(400).json({ success: false, message: 'Select a valid repayment period: 7, 14, 21, or 30 days.' });
   }
   if (!Number.isFinite(amount) || amount <= 0) {
     return res.status(400).json({ success: false, message: 'Enter a valid emergency advance amount.' });
+  }
+  if (amount < EMERGENCY_ADVANCE_MIN_AMOUNT) {
+    return res.status(400).json({ success: false, message: `The minimum Emergency Advance amount is KES ${EMERGENCY_ADVANCE_MIN_AMOUNT.toLocaleString('en-KE')}.` });
   }
   if (amount > EMERGENCY_ADVANCE_MAX_AMOUNT) {
     return res.status(400).json({ success: false, message: `Emergency Advance is capped at KES ${EMERGENCY_ADVANCE_MAX_AMOUNT.toLocaleString('en-KE')}.` });
@@ -2555,6 +2585,8 @@ app.post('/api/v1/emergency-advance/quote', requireVerifiedProxyAuth, async (req
     allowedPeriods: EMERGENCY_ADVANCE_ALLOWED_DAYS,
     periodDays,
     monthlyRate: EMERGENCY_ADVANCE_MONTHLY_RATE,
+    minimumAmount: EMERGENCY_ADVANCE_MIN_AMOUNT,
+    minimumCharge: EMERGENCY_ADVANCE_MIN_CHARGE,
     eligibility: { savingsBalance, savingsBasedLimit, eligibleLimit },
     calculation,
     dueDate: dueDate.toISOString(),
@@ -2572,10 +2604,13 @@ app.post('/api/v1/emergency-advance/apply', requireVerifiedProxyAuth, async (req
     return res.status(403).json({ success: false, message: 'You can only apply for an advance on your own account.' });
   }
   if (!EMERGENCY_ADVANCE_ALLOWED_DAYS.includes(periodDays)) {
-    return res.status(400).json({ success: false, message: 'Select a valid repayment period: 7, 14, or 21 days.' });
+    return res.status(400).json({ success: false, message: 'Select a valid repayment period: 7, 14, 21, or 30 days.' });
   }
   if (!Number.isFinite(amount) || amount <= 0) {
     return res.status(400).json({ success: false, message: 'Enter a valid emergency advance amount.' });
+  }
+  if (amount < EMERGENCY_ADVANCE_MIN_AMOUNT) {
+    return res.status(400).json({ success: false, message: `The minimum Emergency Advance amount is KES ${EMERGENCY_ADVANCE_MIN_AMOUNT.toLocaleString('en-KE')}.` });
   }
   if (amount > EMERGENCY_ADVANCE_MAX_AMOUNT) {
     return res.status(400).json({ success: false, message: `Emergency Advance is capped at KES ${EMERGENCY_ADVANCE_MAX_AMOUNT.toLocaleString('en-KE')}.` });
@@ -2699,7 +2734,7 @@ app.post('/api/v1/emergency-advance/apply', requireVerifiedProxyAuth, async (req
 
     const originatorConversationId = b2cResponse.OriginatorConversationID || requestConversationId;
     const conversationId = b2cResponse.ConversationID || null;
-    const responseCode = b2cResponse.ResponseCode || null;
+    const responseCode = b2cResponse.ResponseCode ?? null;
     const responseDescription = b2cResponse.ResponseDescription || b2cResponse.ResponseMessage || null;
 
     await client.query(
@@ -2757,6 +2792,9 @@ function extractB2CResultParameters(parameters) {
 }
 
 function getFriendlyB2CResultMessage(resultCode, resultDesc) {
+  if (resultCode === null || resultCode === undefined || resultCode === '') {
+    return 'Payment confirmation is still pending. Please do not submit another request.';
+  }
   const code = Number(resultCode);
   if (code === 0) return 'Emergency Advance disbursed successfully.';
   if (code === 2040) {
@@ -2771,6 +2809,270 @@ function getFriendlyB2CResultMessage(resultCode, resultDesc) {
   return 'M-Pesa could not complete the Emergency Advance disbursement. Please try again later or contact the Sacco office.';
 }
 
+async function postEmergencyAdvanceB2CResult(client, txn, resultCode, resultDesc, transactionId, resultRaw) {
+  let receiptEmailTransactionId = null;
+
+  if (resultCode === 0) {
+    const memberResult = await client.query(
+      `SELECT holders_name, mem_category
+       FROM pb_share_register
+       WHERE acc_no = $1`,
+      [txn.member_no]
+    );
+    const member = memberResult.rows[0] || {};
+    const memberName = member.holders_name || txn.member_no;
+    const memberGroup = getEmergencyAdvanceMemberGroup(member);
+    const voucherNo = await getNextVoucherNo(client);
+    const interestReferenceNo = await getNextInterestReferenceNo(client);
+    const mpesaReference = String(transactionId || '').slice(0, 50) || null;
+    const b2cAccountNo = process.env.MPESA_B2C_CASHBOOK_ACCOUNT_NO
+      || process.env.MPESA_B2C_SHORTCODE
+      || process.env.MPESA_SHORTCODE
+      || '3011803';
+
+    await client.query(
+      `UPDATE pb_mpesa_b2c_transactions
+       SET status = 'success',
+           result_code = $2,
+           result_desc = $3,
+           transaction_id = $4,
+           result_raw = $5,
+           updated_at = now()
+       WHERE id = $1
+         AND ledger_posted = false`,
+      [txn.id, resultCode, resultDesc, transactionId, resultRaw]
+    );
+
+    await client.query(
+      `INSERT INTO ac_debtors (
+         activity_code, dealer, item, payee, reason, account_no, receipt_no,
+         cheque_no, journal_no, reference_no, transaction_type, debit, credit,
+         date, invoice_no, description, approved, paid, user_name, cash_point,
+         balance, credit_bal, trans_date
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7,
+               $8, '', $7, 'Payments', $9, 0,
+               now(), $10, 'DEBTORS LEDGER', true, false, $11, 'Cashier',
+               $9, 0, now())`,
+      [
+        EMERGENCY_ADVANCE_DEBTOR_CODE,
+        memberGroup,
+        EMERGENCY_ADVANCE_PURPOSE,
+        memberName,
+        'Emergency Advance loan',
+        txn.member_no,
+        voucherNo,
+        mpesaReference,
+        txn.amount,
+        txn.loan_no,
+        EMERGENCY_ADVANCE_ACCOUNTING_USER,
+      ]
+    );
+
+    if (Number(txn.charge || 0) > 0) {
+      await client.query(
+        `INSERT INTO ac_debtors (
+           activity_code, dealer, item, payee, reason, account_no, receipt_no,
+           cheque_no, journal_no, reference_no, transaction_type, debit, credit,
+           date, invoice_no, description, approved, paid, user_name,
+           balance, credit_bal, trans_date
+         )
+         VALUES ($1, $2, $3, $4, 'Instant Advance Interest', $5, '',
+                 $6, '12.00', $7, 'Interest', $8, 0,
+                 now(), $9, 'Debtors', false, false, $10,
+                 $8, 0, now())`,
+        [
+          EMERGENCY_ADVANCE_DEBTOR_CODE,
+          memberGroup,
+          EMERGENCY_ADVANCE_PURPOSE,
+          memberName,
+          txn.member_no,
+          mpesaReference,
+          voucherNo,
+          txn.charge,
+          txn.loan_no,
+          EMERGENCY_ADVANCE_ACCOUNTING_USER,
+        ]
+      );
+
+      await client.query(
+        `INSERT INTO ac_ledger (
+           activity_code, description, patient_no, dealer, reason, voucher_no,
+           payee, gl_code, cheque_no, receipt_no, journal_no, service_type,
+           transaction_type, debit, credit, date, transaction_no, closed,
+           reconciled, withdrawn, user_name, billing_time
+         )
+         VALUES ($1, $2, $3, $4, 'Interest', $5,
+                 $6, $7, $8, $5, $9, $2,
+                 'Interest', 0, $10, now(), $5, false,
+                 false, false, $11, now())`,
+        [
+          EMERGENCY_ADVANCE_INTEREST_CODE,
+          EMERGENCY_ADVANCE_PURPOSE,
+          txn.member_no,
+          memberName,
+          interestReferenceNo,
+          memberGroup,
+          EMERGENCY_ADVANCE_DEBTOR_CODE,
+          mpesaReference,
+          txn.loan_no,
+          txn.charge,
+          EMERGENCY_ADVANCE_ACCOUNTING_USER,
+        ]
+      );
+    }
+
+    await client.query(
+      `INSERT INTO ac_cash_book (
+         activity_code, description, dealer, payment_mode, voucher_no, payee,
+         drawer, drawer_bank, gl_code, cheque_no, slip_no, receipt_no,
+         journal_no, account_no, account_name, bank_name, transaction_type,
+         debit, credit, date, transaction_no, closed, reconciled, banked,
+         user_name, cash_point, shift_no, chq_date, approved, fm_approval
+       )
+       VALUES ($1, $2, $3, 'M-PESA', $4, $3,
+               $5, '', $6, $7, '', '',
+               $8, $9, 'M-Pesa B2C', 'MPESA B2C', 'Payment',
+               0, $10, now(), $4, true, false, false,
+               $11, 'Cashier', '', now(), false, false)`,
+      [
+        EMERGENCY_ADVANCE_DEBTOR_CODE,
+        EMERGENCY_ADVANCE_PURPOSE,
+        memberName,
+        voucherNo,
+        memberGroup,
+        MPESA_B2C_GL_CODE,
+        mpesaReference,
+        txn.loan_no,
+        b2cAccountNo,
+        txn.amount,
+        EMERGENCY_ADVANCE_ACCOUNTING_USER,
+      ]
+    );
+
+    await client.query(
+      `UPDATE pb_saccoloan
+       SET processed = true, sms_processed = false
+       WHERE loan_no = $1 AND mem_no = $2`,
+      [txn.loan_no, txn.member_no]
+    );
+
+    await client.query(
+      `UPDATE pb_mpesa_b2c_transactions
+       SET ledger_posted = true,
+           ledger_posted_at = now(),
+           voucher_no = $2,
+           interest_reference_no = $3,
+           accounting_user = $4
+       WHERE id = $1`,
+      [txn.id, voucherNo, interestReferenceNo, EMERGENCY_ADVANCE_ACCOUNTING_USER]
+    );
+    receiptEmailTransactionId = txn.id;
+  } else {
+    await client.query(
+      `UPDATE pb_mpesa_b2c_transactions
+       SET status = 'failed',
+           result_code = $2,
+           result_desc = $3,
+           transaction_id = $4,
+           result_raw = $5,
+           updated_at = now()
+       WHERE id = $1
+         AND ledger_posted = false`,
+      [txn.id, resultCode, resultDesc, transactionId, resultRaw]
+    );
+    await client.query(
+      `DELETE FROM pb_saccoloan l
+       WHERE l.loan_no = $1
+         AND l.mem_no = $2
+         AND upper(coalesce(l.lpurpose, '')) = $3
+         AND COALESCE(l.processed, false) = false
+         AND NOT EXISTS (
+           SELECT 1
+           FROM ac_debtors d
+           WHERE d.account_no = l.mem_no
+             AND d.invoice_no = l.loan_no
+         )`,
+      [txn.loan_no, txn.member_no, EMERGENCY_ADVANCE_PURPOSE]
+    );
+  }
+
+  return receiptEmailTransactionId;
+}
+
+async function reconcileB2CTransactionFromProviderLog(conversationId, memberNo) {
+  const client = await dbPool.connect();
+  let receiptEmailTransactionId = null;
+
+  try {
+    await client.query('BEGIN');
+    const txnResult = await client.query(
+      `SELECT id, originator_conversation_id, conversation_id, loan_no, member_no,
+              amount, charge, total_repayable, status, ledger_posted
+       FROM pb_mpesa_b2c_transactions
+       WHERE (originator_conversation_id = $1 OR conversation_id = $1)
+         AND member_no = $2
+       ORDER BY id DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [conversationId, memberNo]
+    );
+    const txn = txnResult.rows[0];
+    if (!txn || txn.status !== 'pending' || txn.ledger_posted) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+
+    const providerResult = await client.query(
+      `SELECT originator_conversationid, conversationid, result_code, result_desc,
+              transactionid, transaction_receipt, transaction_amount,
+              transaction_completed_date_time, receiver_party_public_name
+       FROM mpesa_b2c_transactions
+       WHERE originator_conversationid IN ($1, $2)
+          OR conversationid IN ($1, $2)
+       ORDER BY transaction_completed_date_time DESC NULLS LAST, conversationid DESC NULLS LAST
+       LIMIT 1`,
+      [txn.originator_conversation_id, txn.conversation_id]
+    );
+    const provider = providerResult.rows[0];
+    if (!provider) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+
+    const resultCode = Number(provider.result_code);
+    const transactionId = provider.transaction_receipt || provider.transactionid || null;
+    if (!Number.isInteger(resultCode) || (resultCode === 0 && !transactionId)) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+
+    receiptEmailTransactionId = await postEmergencyAdvanceB2CResult(
+      client,
+      txn,
+      resultCode,
+      provider.result_desc || null,
+      transactionId,
+      JSON.stringify({ source: 'mpesa_b2c_transactions', ...provider })
+    );
+
+    await client.query('COMMIT');
+
+    if (receiptEmailTransactionId) {
+      setImmediate(() => {
+        sendEmergencyAdvanceReceipt({ b2cTransactionId: receiptEmailTransactionId })
+          .catch((err) => console.error('Failed to send Emergency Advance receipt email:', err.message));
+      });
+    }
+    return true;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 app.get('/api/v1/mpesa/b2c/status/:conversationId', requireVerifiedProxyAuth, async (req, res) => {
   const conversationId = String(req.params.conversationId || '').trim();
   if (!conversationId) {
@@ -2778,6 +3080,8 @@ app.get('/api/v1/mpesa/b2c/status/:conversationId', requireVerifiedProxyAuth, as
   }
 
   try {
+    await reconcileB2CTransactionFromProviderLog(conversationId, req.auth.memberNo);
+
     const result = await dbPool.query(
       `SELECT loan_no, member_no, phone_no, amount, period_days, charge, total_repayable,
               status, result_code, result_desc, transaction_id, ledger_posted,
@@ -2805,7 +3109,9 @@ app.get('/api/v1/mpesa/b2c/status/:conversationId', requireVerifiedProxyAuth, as
       charge: Number(txn.charge || 0),
       totalRepayable: Number(txn.total_repayable || 0),
       status: txn.status,
-      message: getFriendlyB2CResultMessage(txn.result_code, txn.result_desc),
+      message: txn.status === 'timeout'
+        ? 'Payment confirmation is delayed. Contact the Sacco office before making another request.'
+        : getFriendlyB2CResultMessage(txn.result_code, txn.result_desc),
       resultCode: txn.result_code,
       resultDesc: txn.result_desc,
       mpesaReceiptNo: txn.transaction_id,
@@ -2828,11 +3134,16 @@ app.post('/api/v1/mpesa/b2c/result', async (req, res) => {
   const conversationId = result.ConversationID;
   const resultCode = Number(result.ResultCode);
   const params = extractB2CResultParameters(result.ResultParameters?.ResultParameter);
-  const transactionId = params.TransactionReceipt || params.TransactionID || null;
+  const transactionId = params.TransactionReceipt || params.TransactionID || result.TransactionID || null;
+  if (result.ResultCode === null || result.ResultCode === undefined || result.ResultCode === '' || !Number.isInteger(resultCode)
+      || (!originatorConversationId && !conversationId) || (resultCode === 0 && !transactionId)) {
+    return res.status(400).json({ ResultCode: 1, ResultDesc: 'Invalid payment result' });
+  }
 
-  const client = await dbPool.connect();
+  let client;
   let receiptEmailTransactionId = null;
   try {
+    client = await dbPool.connect();
     await client.query('BEGIN');
 
     const updateResult = await client.query(
@@ -2922,8 +3233,8 @@ app.post('/api/v1/mpesa/b2c/result', async (req, res) => {
             txn.member_no,
             mpesaReference,
             voucherNo,
-            txn.loan_no,
             txn.charge,
+            txn.loan_no,
             EMERGENCY_ADVANCE_ACCOUNTING_USER,
           ]
         );
@@ -3027,10 +3338,11 @@ app.post('/api/v1/mpesa/b2c/result', async (req, res) => {
       });
     }
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
+    if (client) await client.query('ROLLBACK').catch(() => {});
     console.error('B2C result callback failed:', error.message);
+    return res.status(503).json({ ResultCode: 1, ResultDesc: 'Callback processing unavailable' });
   } finally {
-    client.release();
+    if (client) client.release();
   }
 
   return res.status(200).json(ackResponse);
@@ -3038,48 +3350,41 @@ app.post('/api/v1/mpesa/b2c/result', async (req, res) => {
 
 app.post('/api/v1/mpesa/b2c/timeout', async (req, res) => {
   const result = req.body?.Result || req.body;
-  const client = await dbPool.connect();
+  const originatorConversationId = result?.OriginatorConversationID || null;
+  const conversationId = result?.ConversationID || null;
+  const resultDesc = result?.ResultDesc || 'B2C request timed out before confirmation.';
+
+  let client;
   try {
+    client = await dbPool.connect();
     await client.query('BEGIN');
-    const updateResult = await client.query(
+    await client.query(
       `UPDATE pb_mpesa_b2c_transactions
        SET status = 'timeout',
            result_desc = COALESCE($3, result_desc),
            result_raw = $4,
            updated_at = now()
-       WHERE originator_conversation_id = $1 OR conversation_id = $2
+       WHERE (originator_conversation_id = $1 OR conversation_id = $2)
+         AND ledger_posted = false
+         AND status = 'pending'
        RETURNING loan_no, member_no`,
       [
-        result?.OriginatorConversationID || null,
-        result?.ConversationID || null,
-        result?.ResultDesc || 'B2C request timed out before confirmation.',
+        originatorConversationId,
+        conversationId,
+        resultDesc,
         JSON.stringify(req.body),
       ]
     );
 
-    const txn = updateResult.rows[0];
-    if (txn) {
-      await client.query(
-        `DELETE FROM pb_saccoloan l
-         WHERE l.loan_no = $1
-           AND l.mem_no = $2
-           AND upper(coalesce(l.lpurpose, '')) = $3
-           AND COALESCE(l.processed, false) = false
-           AND NOT EXISTS (
-             SELECT 1
-             FROM ac_debtors d
-             WHERE d.account_no = l.mem_no
-               AND d.invoice_no = l.loan_no
-           )`,
-        [txn.loan_no, txn.member_no, EMERGENCY_ADVANCE_PURPOSE]
-      );
-    }
     await client.query('COMMIT');
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => {});
+    if (client) await client.query('ROLLBACK').catch(() => {});
     console.error('B2C timeout callback failed:', error.message);
+    // Safaricom expects a 200 ACK even for timeout/retry cases. We still log the
+    // issue and acknowledge the callback so the provider does not keep retrying.
+    return res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
   } finally {
-    client.release();
+    if (client) client.release();
   }
 
   return res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
@@ -3088,7 +3393,7 @@ app.post('/api/v1/mpesa/b2c/timeout', async (req, res) => {
 // ============================================
 // LOCAL ENDPOINT: M-PESA STK PUSH (INITIATE PAYMENT)
 // ============================================
-const MPESA_MIN_AMOUNT = 10;
+const MPESA_MIN_AMOUNT = 1;
 const LOAN_OUTSTANDING_TOLERANCE = 1;
 
 app.post('/api/v1/mpesa/stkpush', requireVerifiedProxyAuth, async (req, res) => {
@@ -3226,25 +3531,34 @@ function extractMpesaCallbackMetadata(items) {
 app.post('/api/v1/mpesa/callback', async (req, res) => {
   const ackResponse = { ResultCode: 0, ResultDesc: 'Accepted' };
 
+  const callbackKeyFromQuery = req.query?.key ?? null;
+  const callbackKeyFromHeader = req.headers?.['x-callback-key'] ?? req.headers?.['x-callback-secret'] ?? null;
+  const suppliedCallbackKey = callbackKeyFromQuery || callbackKeyFromHeader;
   const shouldEnforceCallbackSecret = process.env.MPESA_ENV === 'production' && process.env.MPESA_CALLBACK_SECRET;
-  if (shouldEnforceCallbackSecret && req.query.key !== process.env.MPESA_CALLBACK_SECRET) {
-    console.warn('?? [MPESA CALLBACK] Rejected callback with missing/invalid key');
-    return res.status(200).json(ackResponse);
+  if (shouldEnforceCallbackSecret && suppliedCallbackKey && suppliedCallbackKey !== process.env.MPESA_CALLBACK_SECRET) {
+    console.warn('?? [MPESA CALLBACK] Rejected callback with invalid key');
+    return res.status(403).json({ ResultCode: 1, ResultDesc: 'Invalid callback key' });
   }
 
   try {
-    const callback = req.body?.Body?.stkCallback;
+    const callback = req.body?.Body?.stkCallback || req.body?.stkCallback || req.body;
     if (!callback || !callback.CheckoutRequestID) {
       console.warn('?? [MPESA CALLBACK] Malformed callback payload');
       return res.status(200).json(ackResponse);
     }
 
     const { MerchantRequestID, CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = callback;
+    if (ResultCode === null || ResultCode === undefined || ResultCode === '' || !Number.isInteger(Number(ResultCode))) {
+      return res.status(400).json({ ResultCode: 1, ResultDesc: 'Invalid payment result' });
+    }
 
     if (Number(ResultCode) === 0) {
       const meta = extractMpesaCallbackMetadata(CallbackMetadata?.Item);
       const mpesaReceiptNo = meta.MpesaReceiptNumber || null;
       const paidAmount = Number(meta.Amount || 0);
+      if (!mpesaReceiptNo || !Number.isFinite(paidAmount) || paidAmount <= 0) {
+        return res.status(400).json({ ResultCode: 1, ResultDesc: 'Missing payment receipt or amount' });
+      }
 
       const client = await dbPool.connect();
       try {
@@ -3256,6 +3570,9 @@ app.post('/api/v1/mpesa/callback', async (req, res) => {
                result_code = $2,
                result_desc = $3,
                mpesa_receipt_no = $4,
+               tno = $1,
+               receipt_no = CASE WHEN purpose IN ('loan_repayment', 'member_deposit') THEN receipt_no ELSE $4 END,
+               receipted = CASE WHEN purpose IN ('loan_repayment', 'member_deposit') THEN receipted ELSE true END,
                transaction_date = now(),
                callback_raw = $5,
                updated_at = now()
@@ -3296,26 +3613,27 @@ app.post('/api/v1/mpesa/callback', async (req, res) => {
             await client.query(
               `INSERT INTO ac_wdeposit_payable (activity_code, account_no, date, item, reference_no, receipt_no, credit, debit)
                VALUES ($1, $2, now(), 'M-Pesa Deposit', $3, $4, $5, 0)`,
-              [MPESA_ACTIVITY_CODE, txn.account_reference, CheckoutRequestID, mpesaReceiptNo, postedAmount]
+              [MPESA_ACTIVITY_CODE, txn.account_reference, mpesaReceiptNo, mpesaReceiptNo, postedAmount]
             );
-          } else if (txn.purpose === 'member_deposit') {
             await client.query(
-              `INSERT INTO ac_wdeposit_payable (activity_code, account_no, date, item, reference_no, receipt_no, credit, debit)
-               VALUES ($1, $2, now(), 'M-Pesa Savings Deposit', $3, $4, $5, 0)`,
-              [MPESA_ACTIVITY_CODE, txn.member_no, CheckoutRequestID, mpesaReceiptNo, postedAmount]
+              `UPDATE pb_mpesa_transactions
+               SET receipt_no = $2,
+                   receipted = true,
+                   ledger_posted = true,
+                   ledger_posted_at = now()
+               WHERE id = $1`,
+              [txn.id, mpesaReceiptNo]
             );
           } else {
             await client.query(
-              `INSERT INTO ac_debtors (activity_code, account_no, invoice_no, date, item, reference_no, receipt_no, balance, credit_bal)
-               VALUES ($1, $2, $3, now(), 'M-Pesa Repayment', $4, $5, 0, $6)`,
-              [MPESA_ACTIVITY_CODE, txn.member_no, txn.account_reference, CheckoutRequestID, mpesaReceiptNo, postedAmount]
+              `UPDATE pb_mpesa_transactions
+               SET receipted = true,
+                   ledger_posted = true,
+                   ledger_posted_at = now()
+               WHERE id = $1`,
+              [txn.id]
             );
           }
-
-          await client.query(
-            `UPDATE pb_mpesa_transactions SET ledger_posted = true, ledger_posted_at = now() WHERE id = $1`,
-            [txn.id]
-          );
         } else {
           // Already updated by a prior callback delivery for this CheckoutRequestID — update audit fields only.
           const auditResult = await client.query(
@@ -3359,9 +3677,184 @@ app.post('/api/v1/mpesa/callback', async (req, res) => {
     return res.status(200).json(ackResponse);
   } catch (error) {
     console.error('? M-Pesa callback processing failed:', error.message);
-    return res.status(200).json(ackResponse);
+    return res.status(503).json({ ResultCode: 1, ResultDesc: 'Callback processing unavailable' });
   }
 });
+
+function buildStkCallbackRaw(row) {
+  return {
+    source: 'mpesa_stk_call_back',
+    id: row.id,
+    foreign_id: row.foreign_id,
+    transaction_date: row.transaction_date,
+    result_code: row.result_code,
+    result_desc: row.result_desc,
+    mpesa_receipt_no: row.mpesa_receipt_no,
+    customer_phone_number: row.customer_phone_number,
+    amount: row.amount,
+    merchant_request_id: row.merchant_request_id,
+    checkout_request_id: row.checkout_request_id,
+  };
+}
+
+async function reconcileMpesaTransactionFromStkLog(checkoutRequestId, memberNo) {
+  const client = await dbPool.connect();
+  let shouldSendReceipt = false;
+
+  try {
+    await client.query('BEGIN');
+
+    const txnResult = await client.query(
+      `SELECT id, member_no, purpose, account_reference, amount, status, ledger_posted
+       FROM pb_mpesa_transactions
+       WHERE checkout_request_id = $1
+         AND member_no = $2
+       FOR UPDATE`,
+      [checkoutRequestId, memberNo]
+    );
+
+    if (txnResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+
+    const txn = txnResult.rows[0];
+    if (txn.status !== 'pending' || txn.ledger_posted) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+
+    const callbackResult = await client.query(
+      `SELECT id, foreign_id, transaction_date, result_code, result_desc,
+              mpesa_receipt_no, customer_phone_number, amount, merchant_request_id,
+              checkout_request_id
+       FROM mpesa_stk_call_back
+       WHERE checkout_request_id = $1
+       ORDER BY id DESC
+       LIMIT 1`,
+      [checkoutRequestId]
+    );
+
+    if (callbackResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+
+    const callback = callbackResult.rows[0];
+    const resultCode = Number(callback.result_code);
+    const resultDesc = callback.result_desc || '';
+    const callbackRaw = JSON.stringify(buildStkCallbackRaw(callback));
+
+    if (!Number.isInteger(resultCode)) {
+      await client.query('ROLLBACK');
+      return false;
+    }
+
+    if (resultCode === 0) {
+      const mpesaReceiptNo = String(callback.mpesa_receipt_no || '').trim();
+      const paidAmount = Number(callback.amount);
+      const expectedAmount = Number(txn.amount);
+
+      if (!mpesaReceiptNo || !Number.isFinite(paidAmount) || paidAmount <= 0) {
+        await client.query('ROLLBACK');
+        return false;
+      }
+
+      if (Math.round(paidAmount) !== Math.round(expectedAmount)) {
+        await client.query(
+          `UPDATE pb_mpesa_transactions
+           SET status = 'failed',
+               result_code = $2,
+               result_desc = $3,
+               callback_raw = $4,
+               updated_at = now()
+           WHERE id = $1`,
+          [
+            txn.id,
+            resultCode,
+            `M-Pesa paid amount mismatch. Expected KES ${expectedAmount}, received KES ${paidAmount}.`,
+            callbackRaw,
+          ]
+        );
+        await client.query('COMMIT');
+        return true;
+      }
+
+      await client.query(
+        `UPDATE pb_mpesa_transactions
+         SET status = 'success',
+             result_code = $2,
+             result_desc = $3,
+             mpesa_receipt_no = $4,
+             tno = $7,
+             receipt_no = CASE WHEN purpose IN ('loan_repayment', 'member_deposit') THEN receipt_no ELSE $4 END,
+             receipted = CASE WHEN purpose IN ('loan_repayment', 'member_deposit') THEN receipted ELSE true END,
+             transaction_date = COALESCE(to_timestamp(NULLIF($5, ''), 'YYYYMMDDHH24MISS')::timestamp, now()),
+             callback_raw = $6,
+             updated_at = now()
+         WHERE id = $1`,
+        [txn.id, resultCode, resultDesc, mpesaReceiptNo, callback.transaction_date, callbackRaw, checkoutRequestId]
+      );
+
+      const MPESA_ACTIVITY_CODE = '20-25-010';
+      if (txn.purpose === 'withdrawable_deposit' || txn.purpose === 'savings') {
+        await client.query(
+          `INSERT INTO ac_wdeposit_payable (activity_code, account_no, date, item, reference_no, receipt_no, credit, debit)
+           VALUES ($1, $2, now(), 'M-Pesa Deposit', $3, $4, $5, 0)`,
+          [MPESA_ACTIVITY_CODE, txn.account_reference, mpesaReceiptNo, mpesaReceiptNo, paidAmount]
+        );
+        await client.query(
+          `UPDATE pb_mpesa_transactions
+           SET receipt_no = $2,
+               receipted = true,
+               ledger_posted = true,
+               ledger_posted_at = now()
+           WHERE id = $1`,
+          [txn.id, mpesaReceiptNo]
+        );
+      } else {
+        await client.query(
+          `UPDATE pb_mpesa_transactions
+           SET receipted = true,
+               ledger_posted = true,
+               ledger_posted_at = now()
+           WHERE id = $1`,
+          [txn.id]
+        );
+      }
+      shouldSendReceipt = true;
+    } else {
+      const status = resultCode === 1032 ? 'cancelled' : 'failed';
+      await client.query(
+        `UPDATE pb_mpesa_transactions
+         SET status = $2,
+             result_code = $3,
+             result_desc = $4,
+             callback_raw = $5,
+             updated_at = now()
+         WHERE id = $1`,
+        [txn.id, status, resultCode, resultDesc, callbackRaw]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    if (shouldSendReceipt) {
+      setImmediate(() => {
+        sendPaymentReceipt({ checkoutRequestId }).catch((err) => {
+          console.error('? Failed to send M-Pesa payment receipt:', err.message);
+        });
+      });
+    }
+
+    return true;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
 
 // ============================================
 // LOCAL ENDPOINT: M-PESA PAYMENT STATUS
@@ -3370,6 +3863,8 @@ app.get('/api/v1/mpesa/status/:checkoutRequestId', requireVerifiedProxyAuth, asy
   const { checkoutRequestId } = req.params;
 
   try {
+    await reconcileMpesaTransactionFromStkLog(checkoutRequestId, req.auth.memberNo);
+
     const result = await dbPool.query(
       `SELECT status, result_desc, mpesa_receipt_no, amount, purpose, account_reference,
               transaction_date, member_no, receipt_emailed

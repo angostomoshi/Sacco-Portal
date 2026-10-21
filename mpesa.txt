@@ -1,0 +1,114 @@
+-- public.pb_mpesa_transactions definition
+
+-- Drop table
+
+-- DROP TABLE public.pb_mpesa_transactions;
+
+CREATE TABLE public.pb_mpesa_transactions (
+	id serial4 NOT NULL,
+	merchant_request_id varchar(100) NULL,
+	checkout_request_id varchar(100) NOT NULL,
+	member_no varchar(50) NOT NULL,
+	purpose varchar(20) NOT NULL,
+	account_reference varchar(50) NOT NULL,
+	phone_no varchar(15) NOT NULL,
+	amount numeric(14, 2) NOT NULL,
+	status varchar(20) DEFAULT 'pending'::character varying NOT NULL,
+	result_code int4 NULL,
+	result_desc text NULL,
+	mpesa_receipt_no varchar(30) NULL,
+	transaction_date timestamp NULL,
+	callback_raw jsonb NULL,
+	ledger_posted bool DEFAULT false NOT NULL,
+	ledger_posted_at timestamp NULL,
+	receipt_emailed bool DEFAULT false NOT NULL,
+	sms_sent bool DEFAULT false NOT NULL,
+	created_at timestamp DEFAULT now() NOT NULL,
+	updated_at timestamp DEFAULT now() NOT NULL,
+	receipted bool DEFAULT false NULL,
+	tno varchar(50) NULL,
+	receipt_no varchar(50) DEFAULT 'N/A'::character varying NULL,
+	CONSTRAINT pb_mpesa_transactions_checkout_request_id_key UNIQUE (checkout_request_id),
+	CONSTRAINT pb_mpesa_transactions_pkey PRIMARY KEY (id)
+);
+CREATE INDEX idx_mpesa_txn_member ON public.pb_mpesa_transactions USING btree (member_no);
+CREATE INDEX idx_mpesa_txn_status ON public.pb_mpesa_transactions USING btree (status);
+
+-- Table Triggers
+
+create trigger rct_insertnew after
+update
+    on
+    public.pb_mpesa_transactions for each row execute procedure rct_insert();
+
+-- Table Rules
+
+-- DROP RULE receipt_inst ON public.pb_mpesa_transactions;
+
+CREATE RULE receipt_inst AS
+    ON INSERT TO public.pb_mpesa_transactions DO  INSERT INTO ac_shares_ledger (activity_code, dealer, item, voucher_no, payee, reason, account_no, receipt_no, gl_code, journal_no, reference_no, transaction_type, debit, credit, date, invoice_no, description, approved, sms_sent, user_name, cash_point, date_due, invoice_date, vat, balance)  SELECT '60-62-003',
+            pb_share_register.holders_name,
+            'NON-WITHDRAWABLE DEPOSITS',
+            'M-Pesa',
+            pb_share_register.holders_name,
+            'SAVINGS',
+            r.member_no,
+            r.receipt_no,
+            r.phone_no,
+            r.phone_no,
+            r.receipt_no,
+            'Shares',
+            0,
+            r.amount,
+            (r.created_at)::date AS created_at,
+            r.receipt_no,
+            'NON-WITHDRAWABLE DEPOSITS',
+            false AS bool,
+            false AS bool,
+            s.user_name,
+            s.shift_no,
+            CURRENT_DATE AS "current_date",
+            CURRENT_DATE AS "current_date",
+            0,
+            r.amount
+           FROM pb_mpesa_transactions r,
+            pb_share_register,
+            ac_shifts s
+          WHERE ((r.receipted = false) AND ((r.status)::text = 'success'::text) AND ((r.receipt_no)::text <> 'N/A'::text) AND ((r.member_no)::text = (pb_share_register.acc_no)::text) AND ((r.account_reference)::text = (pb_share_register.acc_no)::text) AND ((s.cash_point)::text = 'Cashier'::text) AND ((s.user_name)::text = 'auto_receipt'::text) AND (((s.status)::text = 'Running'::text) OR ((s.status)::text = 'Suspended'::text)));
+-- DROP RULE receipt_inst_loan ON public.pb_mpesa_transactions;
+
+CREATE RULE receipt_inst_loan AS
+    ON INSERT TO public.pb_mpesa_transactions DO  INSERT INTO ac_debtors (activity_code, dealer, item, admission_no, payee, reason, account_no, receipt_no, cheque_no, journal_no, reference_no, transaction_type, debit, credit, date, invoice_no, description, approved, paid, user_name, cash_point, balance, sent, credit_bal)  SELECT '20-23-131',
+            pb_share_register.short_name,
+            pb_share_register.holders_name,
+            r.mpesa_receipt_no,
+            pb_share_register.holders_name,
+            l.lpurpose,
+            r.member_no,
+            r.receipt_no,
+            r.phone_no,
+            r.mpesa_receipt_no,
+            r.receipt_no,
+            'Receipts',
+            0,
+            r.amount,
+            (r.created_at)::date AS created_at,
+            l.loan_no,
+            '20-23-131',
+            false AS bool,
+            false AS bool,
+            s.user_name,
+            s.shift_no,
+            0,
+            false AS bool,
+            r.amount
+           FROM pb_mpesa_transactions r,
+            pb_share_register,
+            ac_shifts s,
+            pb_saccoloan l
+          WHERE ((r.receipted = false) AND ((r.status)::text = 'success'::text) AND ((r.receipt_no)::text <> 'N/A'::text) AND ((r.member_no)::text = (l.mem_no)::text) AND ((r.account_reference)::text = (l.loan_no)::text) AND ((pb_share_register.acc_no)::text = (r.member_no)::text) AND ((s.cash_point)::text = 'Cashier'::text) AND ((s.user_name)::text = 'auto_receipt'::text) AND (((s.status)::text = 'Running'::text) OR ((s.status)::text = 'Suspended'::text)));
+-- DROP RULE rno_update ON public.pb_mpesa_transactions;
+
+CREATE RULE rno_update AS
+    ON INSERT TO public.pb_mpesa_transactions DO  UPDATE pb_mpesa_transactions SET receipt_no = ('R'::text || nextval('receipt_no_seq'::regclass))
+  WHERE ((pb_mpesa_transactions.receipted = false) AND ((pb_mpesa_transactions.status)::text = 'success'::text) AND ((pb_mpesa_transactions.receipt_no)::text = 'N/A'::text));

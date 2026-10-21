@@ -1,0 +1,29 @@
+Transaction Date,M-Pesa Receipt No,Sacco Receipt No,Portal Match,Portal Transaction ID,Member No,Member Name,Purpose,Account Reference,Phone Number,Amount,Status,Result Code,Result Description,Checkout Request ID,Merchant Request ID,Ledger Posted,Receipt Emailed
+2026-10-06 09:05:42,UJ6OI9PDDO,R33309,Portal posted,206,MS486,PAMELA OTIENO,loan_repayment,1428/2026,254723856187,15000.00,success,0,The service request is processed successfully.,ws_CO_06102026090528853723856187,ae88-4298-aa71-02ddc38dcb2a1165421,true,true
+2026-10-06 10:56:29,UJ6EX9EL3M,R33313,Portal posted,207,MS561,UNITER WINNIE KHATIMBA,loan_repayment,232/2023,254792892538,10000.00,success,0,The service request is processed successfully.,ws_CO_06102026105616271792892538,55ff-45e5-a5ff-8bc96d20c8021369880,true,true
+2026-10-06 11:59:19,UJ6DM95AE1,R33314,Portal posted,209,MS952,PERIS KANANU MUNGATHIA,member_deposit,MS952,254718699969,10000.00,success,0,The service request is processed successfully.,ws_CO_06102026115908497718699969,f3da-497c-ac94-b18958f071171668759,true,true
+2026-10-06 12:25:16,UJ64C9SZ5H,R33322,Portal posted,210,MS838,JAMES KIPRUTO KIRUI,loan_repayment,1730/2026,254714273416,4100.00,success,0,The service request is processed successfully.,ws_CO_06102026122508657714273416,6490-4ec7-b7c1-9e4f5323e53e1894104,true,false
+2026-10-06 13:07:40,UJ60591J7E,R33324,Portal posted,211,MS817,STEPHEN NGANGA NDUNGU,loan_repayment,1631/2026,254723484600,3000.00,success,0,The service request is processed successfully.,ws_CO_06102026130729305723484600,b6f4-42cf-8bdb-a196fd64e7981010927,true,true
+2026-10-06 13:34:44,UJ6L69B045,R33325,Portal posted,212,MS574,BENJAMIN WAMBUA MUTHENYA,member_deposit,MS574,254721210623,1500.00,success,0,The service request is processed successfully.,ws_CO_06102026133430751721210623,da32-48eb-beab-184e05783ef7166366,true,true
+2026-10-06 15:43:52,UJ6Q793025,R33326,Portal posted,214,MS341,DANIEL GAKUNDI NGORU,loan_repayment,247/2024,254710309738,200.00,success,0,The service request is processed successfully.,ws_CO_06102026154339380710309738,2590-4a34-8205-dae97ec52a592019385,true,true
+2026-10-06 18:16:09,UJ69M9DLDN,R33347,Portal posted,215,MS469,EDITH ACHIENG OCHIENG,loan_repayment,345/2024,254717662731,5500.00,success,0,The service request is processed successfully.,ws_CO_06102026181555207717662731,4bf1-4d0e-936b-1d98a98069bf398875,true,true
+2026-10-06 19:04:54,UJ61Z9OTAZ,N/A,"Provider success, portal pending",216,MS1155,JAPHET WANJOHI MWANIKI,member_deposit,MS1155,254722474577,99.00,pending,0,The service request is processed successfully.,ws_CO_06102026190438452722474577,ec3c-4557-b87e-593689f86904230638,false,false
+2026-10-06 19:30:46,UJ6459JMI4,R33348,Portal posted,217,MS309,EDWIN BULINDA ICHERA,loan_repayment,1771/2026,254791417606,15675.00,success,0,The service request is processed successfully.,ws_CO_06102026193030065791417606,4bf1-4d0e-936b-1d98a98069bf700105,true,true
+2026-10-06 19:33:03,UJ6459JFXY,R33349,Portal posted,218,MS309,EDWIN BULINDA ICHERA,loan_repayment,1783/2026,254791417606,5117.00,success,0,The service request is processed successfully.,ws_CO_06102026193250334791417606,5522-4973-a939-08e7d28e5dcb188639,true,true
+2026-10-06 21:43:42,UJ62N99IC9,R33350,Portal posted,219,MS089,LYLIAN KEREKA SHANDA,loan_repayment,1732/2026,254723119696,5350.00,success,0,The service request is processed successfully.,ws_CO_06102026214322771723119696,3aeb-49d3-b14f-1db445d7c847341777,true,true
+2026-10-06 22:37:58,UJ6JR9AJHV,R33351,Portal posted,221,MS863,DIANA NELIMA RODAH,loan_repayment,1639/2026,254791961823,10592.00,success,0,The service request is processed successfully.,ws_CO_06102026223739865791961823,ab6e-447b-a539-f1b8bb4ea614148662,true,true
+2026-10-06 22:41:21,UJ6JR9AI6R,R33352,Portal posted,222,MS863,DIANA NELIMA RODAH,loan_repayment,1639/2026,254791961823,992.00,success,0,The service request is processed successfully.,ws_CO_06102026224106756791961823,0468-40fe-ae94-892e13aa396b385659,true,true
+
+SUMMARY
+Total Successful Paybill Receipts,14
+Total Amount,87125
+
+Totals By Purpose
+Purpose,Amount
+loan_repayment,75526
+member_deposit,11599
+
+Counts By Portal Match
+Portal Match,Count
+Portal posted,13
+"Provider success, portal pending",1

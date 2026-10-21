@@ -1,0 +1,19 @@
+{
+  "startDate": "2026-01-01",
+  "endDate": "2026-10-07",
+  "generatedAt": "2026-10-07T05:53:16.968Z",
+  "successfulTransactions": 149,
+  "totalAmount": 1177520,
+  "totalsByPurpose": {
+    "outside_portal": 101,
+    "loan_repayment": 828069,
+    "member_deposit": 244250,
+    "withdrawable_deposit": 105100
+  },
+  "countsByPortalMatch": {
+    "Outside portal / no portal match": 2,
+    "Provider success, portal pending": 7,
+    "Portal posted": 140
+  },
+  "reportPath": "C:\\Sacco-Portal\\reports\\safaricom-paybill-report-2026-01-01-to-2026-10-07.csv"
+}

@@ -1,0 +1,47 @@
+{
+  "totalRows": 2539,
+  "c2bTotal": 25737014,
+  "b2cTotal": 148550,
+  "byFlow": {
+    "C2B": {
+      "count": 2491,
+      "amount": 25737014
+    },
+    "B2C": {
+      "count": 48,
+      "amount": 148550
+    }
+  },
+  "byPurpose": {
+    "outside_portal": {
+      "count": 1045,
+      "amount": 12144489
+    },
+    "emergency_advance": {
+      "count": 48,
+      "amount": 148550
+    },
+    "member_deposit": {
+      "count": 1317,
+      "amount": 12576213
+    },
+    "loan_repayment": {
+      "count": 125,
+      "amount": 911212
+    },
+    "withdrawable_deposit": {
+      "count": 4,
+      "amount": 105100
+    }
+  },
+  "byPortalMatch": {
+    "Outside portal / no portal match": 2358,
+    "Portal posted": 180,
+    "Provider success, portal pending": 1
+  },
+  "netMovement": 25588464,
+  "startDate": "2026-01-01",
+  "endDate": "2026-10-07",
+  "generatedAt": "2026-10-07T06:06:48.211Z",
+  "reportPath": "C:\\Sacco-Portal\\reports\\full-mpesa-report-2026-01-01-to-2026-10-07.csv"
+}

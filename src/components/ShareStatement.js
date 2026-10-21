@@ -1,11 +1,10 @@
 // ShareStatement.js - Fast loading, no blinking, bold content - FIXED
-import React, { useRef, useState, useEffect } from 'react';
-import html2canvas from 'html2canvas';
-import jsPDF from 'jspdf';
+import React, { useState, useEffect } from 'react';
+import { createSavingsStatementPdf } from './savingsStatementPdf';
 import Alert from './Alert';
 
 function ShareStatement() {
-  const reportRef = useRef();
+  const [downloadError, setDownloadError] = useState('');
   const [memberData, setMemberData] = useState(null);
   const [shareTransactions, setShareTransactions] = useState([]);
   const [totals, setTotals] = useState({ totalSavings: 0 });
@@ -248,20 +247,20 @@ function ShareStatement() {
     return () => window.removeEventListener('mpesa:payment-success', refreshAfterMpesa);
   }, []);
 
-  const handleDownloadPDF = async () => {
-    const element = reportRef.current;
-    const canvas = await html2canvas(element, {
-      scale: 2,
-      backgroundColor: '#ffffff',
-      logging: false,
-      useCORS: true
-    });
-    const imgData = canvas.toDataURL('image/png');
-    const pdf = new jsPDF('p', 'mm', 'a4');
-    const imgWidth = 210;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
-    pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
-    pdf.save(`savings-statement-${memberData?.accNo || 'member'}-${new Date().toISOString().split('T')[0]}.pdf`);
+  const handleDownloadPDF = () => {
+    setDownloadError('');
+    try {
+      const pdf = createSavingsStatementPdf({
+        member: memberData || {},
+        header: headerData || {},
+        transactions: shareTransactions,
+        totalSavings: totals.totalSavings,
+      });
+      pdf.save(`savings-statement-${memberData?.accNo || memberData?.memberNo || 'member'}-${new Date().toISOString().split('T')[0]}.pdf`);
+    } catch (err) {
+      console.error('Savings statement download failed:', err);
+      setDownloadError('We could not generate your statement. Please try downloading it again.');
+    }
   };
 
   // Show minimal loading only if no data at all
@@ -304,7 +303,7 @@ function ShareStatement() {
   return (
     <>
       {/* Report Content */}
-      <div ref={reportRef} className="report-container">
+      <div className="report-container">
         {/* Header */}
         <div className="report-header">
           <h1>{headerData?.organisationName || 'METROPOLITAN HOSPITAL SACCO LTD'}</h1>
@@ -401,10 +400,13 @@ function ShareStatement() {
 
       {/* Download Button */}
       <div className="download-section">
-        <button onClick={handleDownloadPDF} className="download-btn" disabled={shareTransactions.length === 0}>
+        <button onClick={handleDownloadPDF} className="download-btn" disabled={loading || shareTransactions.length === 0}>
           📄 Download PDF Statement
         </button>
       </div>
+      {downloadError && (
+        <Alert type="warning" title="Download failed">{downloadError}</Alert>
+      )}
       {error && (
         <Alert type="warning" title="Savings statement notice">
           {error}

@@ -50,7 +50,7 @@ function friendlyPaymentMessage(message, fallback = 'We could not complete this 
     return 'Please enter a valid M-Pesa phone number and try again.';
   }
   if (/amount|minimum|at least/i.test(text)) {
-    return 'Please enter a valid amount of at least KES 10.';
+    return 'Please enter a valid amount of at least KES 1.';
   }
   if (/not found|account|loan/i.test(text)) {
     return 'We could not confirm this account or loan. Please refresh the page and try again.';
@@ -178,8 +178,8 @@ const MpesaPaymentModal = ({
   const handleSubmit = async (event) => {
     event.preventDefault();
     const numericAmount = Number(amount);
-    if (!numericAmount || numericAmount < 10) {
-      setMessage('Enter a valid amount of at least KES 10.');
+    if (!numericAmount || numericAmount < 1) {
+      setMessage('Enter a valid amount of at least KES 1.');
       return;
     }
     const phoneDigits = phone.replace(/\D/g, '');

@@ -26,10 +26,12 @@ function ApplyLoan() {
   const MIN_AMOUNT = 1000;
   const MAX_AMOUNT = 50000;
   const MAX_PERIOD = 6;
+  const EMERGENCY_MIN_AMOUNT = 1000;
   const EMERGENCY_MAX_AMOUNT = 5000;
+  const EMERGENCY_MIN_CHARGE = 100;
   const EMERGENCY_LIMIT_SAVINGS_RATE = 10;
   const EMERGENCY_MONTHLY_RATE = 10;
-  const EMERGENCY_PERIOD_OPTIONS = [7, 14, 21];
+  const EMERGENCY_PERIOD_OPTIONS = [7, 14, 21, 30];
   const PAY_MODES = [
     { value: 'N/A', label: 'N/A' },
     { value: 'checkoff', label: 'Check off' },
@@ -160,7 +162,8 @@ function ApplyLoan() {
       if (amount > 0) {
         const days = parseFloat(emergencyDays) || 7;
         const roundedAmount = Math.round(amount);
-        const charge = Math.round(roundedAmount * (days / 30) * (EMERGENCY_MONTHLY_RATE / 100));
+        const proratedCharge = Math.round(roundedAmount * (days / 30) * (EMERGENCY_MONTHLY_RATE / 100));
+        const charge = Math.max(proratedCharge, EMERGENCY_MIN_CHARGE);
         const total = roundedAmount + charge;
         setTotalAmount(total.toFixed(2));
         setMonthlyDeduction(charge.toFixed(2));
@@ -204,6 +207,12 @@ function ApplyLoan() {
 
     if (productType === 'emergency') {
       const days = parseFloat(emergencyDays);
+      if (amount < EMERGENCY_MIN_AMOUNT) {
+        setSubmitMessage(`The minimum Emergency Advance amount is KES ${EMERGENCY_MIN_AMOUNT.toLocaleString()}.`);
+        setSubmitMessageType('error');
+        return false;
+      }
+
       if (amount > EMERGENCY_MAX_AMOUNT) {
         setSubmitMessage(`Emergency Advance is capped at KES ${EMERGENCY_MAX_AMOUNT.toLocaleString()}.`);
         setSubmitMessageType('error');
@@ -211,7 +220,7 @@ function ApplyLoan() {
       }
 
       if (!EMERGENCY_PERIOD_OPTIONS.includes(days)) {
-        setSubmitMessage('Please select a repayment period of 7, 14, or 21 days.');
+        setSubmitMessage('Please select a repayment period of 7, 14, 21, or 30 days.');
         setSubmitMessageType('error');
         return false;
       }
@@ -504,14 +513,14 @@ function ApplyLoan() {
                 <input
                   type="number"
                   className="calculator-input"
-                  placeholder={productType === 'emergency' ? `Enter amount up to KES ${EMERGENCY_MAX_AMOUNT.toLocaleString()}` : `Enter amount (KES ${MIN_AMOUNT.toLocaleString()} - ${MAX_AMOUNT.toLocaleString()})`}
+                  placeholder={productType === 'emergency' ? `Enter amount (KES ${EMERGENCY_MIN_AMOUNT.toLocaleString()} - ${EMERGENCY_MAX_AMOUNT.toLocaleString()})` : `Enter amount (KES ${MIN_AMOUNT.toLocaleString()} - ${MAX_AMOUNT.toLocaleString()})`}
                   value={loanAmount}
                   onChange={(e) => {
                     // Allow free typing; validation runs on submit.
                     setLoanAmount(e.target.value);
                   }}
                   step="1"
-                  min={productType === 'emergency' ? 1 : MIN_AMOUNT}
+                  min={productType === 'emergency' ? EMERGENCY_MIN_AMOUNT : MIN_AMOUNT}
                   max={productType === 'emergency' ? EMERGENCY_MAX_AMOUNT : MAX_AMOUNT}
                   required
                 />
@@ -583,7 +592,7 @@ function ApplyLoan() {
               <div className="info-text">
                 {productType === 'emergency' ? (
                   <>
-                    <strong>Emergency Advance Terms:</strong> Limit is 10% of savings, capped at KES {EMERGENCY_MAX_AMOUNT.toLocaleString()} | Select 7, 14, or 21 days | Charge is prorated at 10% per 30 days | Disbursed to the registered M-Pesa number after approval
+                    <strong>Emergency Advance Terms:</strong> Minimum KES {EMERGENCY_MIN_AMOUNT.toLocaleString()} | Limit is 10% of savings, capped at KES {EMERGENCY_MAX_AMOUNT.toLocaleString()} | Select 7, 14, 21, or 30 days | Charge is prorated at 10% per 30 days, minimum KES {EMERGENCY_MIN_CHARGE.toLocaleString()} | Disbursed to the registered M-Pesa number after approval
                   </>
                 ) : (
                   <>
@@ -612,7 +621,7 @@ function ApplyLoan() {
                 <div className="calculation-details">
                   <small>
                     {productType === 'emergency'
-                      ? `Calculation: ${formatCurrency(loanAmount)} + (${formatCurrency(loanAmount)} x ${emergencyDays}/30 x ${EMERGENCY_MONTHLY_RATE}%) = KES ${formatCurrency(totalAmount)}`
+                      ? `Calculation: ${formatCurrency(loanAmount)} + max(${formatCurrency(loanAmount)} x ${emergencyDays}/30 x ${EMERGENCY_MONTHLY_RATE}%, KES ${formatCurrency(EMERGENCY_MIN_CHARGE)}) = KES ${formatCurrency(totalAmount)}`
                       : `Calculation: ${formatCurrency(loanAmount)} + (${formatCurrency(loanAmount)} x ${INTEREST_RATE}% x ${period}) = KES ${formatCurrency(totalAmount)}`}
                   </small>
                 </div>

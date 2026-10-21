@@ -33,7 +33,7 @@ import logo from './log.png';
 
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const IDLE_WARNING_MS = 60 * 1000;
-const ABSOLUTE_SESSION_MS = 60 * 60 * 1000;
+const ABSOLUTE_SESSION_MS = 30 * 60 * 1000;
 
 const clearSession = () => {
   [

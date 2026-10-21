@@ -17,6 +17,8 @@ services:
       dockerfile: Dockerfile.proxy
     ports:
       - "3023:3023"
+    env_file:
+      - ./.env
     environment:
       # You can override these variables when running on the live server
       - DB_HOST=192.168.4.10
